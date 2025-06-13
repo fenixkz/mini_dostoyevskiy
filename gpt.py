@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math 
+from typing import Tuple
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6): # Added eps
@@ -42,7 +43,7 @@ def apply_rotary_emb(
     xq: torch.Tensor, # Query tensor (B, T, head_size) or (B, T, num_heads, head_size_per_head)
     xk: torch.Tensor, # Key tensor
     freqs_cis: torch.Tensor, # (T_slice, head_size / 2)
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Applies rotary positional embedding to query and key tensors.
     """
