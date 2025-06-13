@@ -160,6 +160,14 @@ def main():
     val_dataset = TextDataset(val_data, context_length)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
     
+    if dist.get_rank() == 0: # Only print from the main process to avoid clutter
+        print("\n--- DEBUGGING DATALOADER LENGTH ---")
+        print(f"Total items in train_dataset: {len(train_dataset)}")
+        print(f"Items per GPU (sampler length): {len(train_sampler)}")
+        print(f"Configured batch_size: {batch_size}")
+        print(f"CALCULATED len(train_loader) should be: {len(train_sampler) // batch_size}")
+        print("-----------------------------------\n")
+
     train_loader = DataLoader(
                                 train_dataset,
                                 batch_size=batch_size,
