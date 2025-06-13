@@ -5,13 +5,15 @@ from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 from gpt import GPT
-from data import get_dataset
+from data import get_dataset, TextDataset
 import cProfile
 import pstats
 import io
 import os
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
 from transformers import get_cosine_schedule_with_warmup
+from torch.utils.data import Dataset, DataLoader
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CONTINUE_TRAINING = False
 
@@ -20,12 +22,6 @@ def encode(tokenizer: ByteLevelBPETokenizer, text):
 
 def decode(tokenizer: ByteLevelBPETokenizer, ids):
     return tokenizer.decode(ids)
-
-def get_batch(data, context_length, batch_size):
-    ind = torch.randint(len(data) - context_length, (batch_size, 1))
-    x = torch.stack([data[i:i+context_length] for i in ind])
-    y = torch.stack([data[i+1:i+context_length+1] for i in ind])
-    return x, y
 
 def write(model, x, max_words, context_length):
     model.eval()
@@ -43,25 +39,20 @@ def write(model, x, max_words, context_length):
     model.train()
     return x
 
-def validate_loss(model, train_data, val_data, n, context_length, batch_size):
-    out = {}
+def validate_loss(model, val_loader, n_epoch, device):
     model.eval()
     with torch.no_grad():
-        train_losses = torch.zeros(n)
-        val_losses = torch.zeros(n)
-        for k in range(n):
-            x, y = get_batch(train_data, context_length, batch_size)
-            _, loss = model.forward(x, y)
-            train_losses[k] = loss.item()
-            
-            x, y = get_batch(val_data, context_length, batch_size)
-            _, loss = model.forward(x, y)
-            val_losses[k] = loss.item()
-            
+        val_losses = torch.zeros(n_epoch)
+        for k in range(n_epoch):
+            for x, y in val_loader:
+                # Move data to device
+                x, y = x.to(device), y.to(device)
+                _, loss = model.forward(x, y)
+                val_losses[k] = loss.item()
     model.train()
-    return train_losses.mean(), val_losses.mean()
+    return val_losses.mean()
 
-def train_tokenizer(train_data):
+def train_tokenizer(train_data, vocab_size):
     cleaned_book_filepath = 'data/books_for_tokenizer.txt'
 
     if not os.path.exists('data'):
@@ -84,7 +75,7 @@ def train_tokenizer(train_data):
     print(f"Начинаем обучение ByteLevelBPETokenizer на файле: {cleaned_book_filepath}")
     byte_level_tokenizer.train(
         files=[cleaned_book_filepath],
-        vocab_size=10000, 
+        vocab_size=vocab_size, 
         min_frequency=3,
         special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"],
     )
@@ -96,24 +87,24 @@ def train_tokenizer(train_data):
     os.makedirs(save_directory, exist_ok=True)
 
     # Сохраняем токенизатор в один JSON файл внутри этой директории
-    tokenizer_filepath = os.path.join(save_directory, "tokenizer.json")
+    tokenizer_filepath = os.path.join(save_directory, f"tokenizer_{vocab_size}.json")
     byte_level_tokenizer.save(tokenizer_filepath)
     print(f"Токенизатор сохранен в: {tokenizer_filepath}")
 
     return byte_level_tokenizer
 
 def main():
-
+    
+    vocab_size = 10000
     train_data, val_data = get_dataset()
-
-    if CONTINUE_TRAINING:
-        tokenizer = Tokenizer.from_file('data/tokenizer/tokenizer.json')
+    if os.path.exists(f'data/tokenizer/tokenizer_{vocab_size}.json'):
+        tokenizer = Tokenizer.from_file(f'data/tokenizer/tokenizer_{vocab_size}.json')
     else:
-        tokenizer = train_tokenizer(train_data)
+        tokenizer = train_tokenizer(train_data, vocab_size)
     
     train_data = encode(tokenizer, train_data)
     val_data = encode(tokenizer, val_data)
-
+    
     print(f'Training set contains: {len(train_data)} tokens')
     print(f'Validation set contains: {len(val_data)} tokens')
 
@@ -128,7 +119,7 @@ def main():
     dropout = 0.1
     max_iters = 2000000
     eval_interval = 500
-    eval_iters = 20
+    eval_iters = 1
     learning_rate = 3e-4
     patience = 50
     no_improve = 0
@@ -137,8 +128,12 @@ def main():
     grad_accum_steps = 4
     ####
 
-    train_data = torch.tensor(train_data, device=device)
-    val_data = torch.tensor(val_data, device=device)
+    train_data = torch.tensor(train_data, dtype=torch.long)  # Keep on CPU
+    val_data = torch.tensor(val_data, dtype=torch.long)      # Keep on CPU
+    train_dataset = TextDataset(train_data, context_length)
+    val_dataset = TextDataset(val_data, context_length)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=8)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=8)
 
     model = GPT(vocab_size=vocab_size, context_length = context_length, 
                 embedding_dim = n_embedding, num_heads = n_heads, 
@@ -156,24 +151,26 @@ def main():
     val_losses = []
     best_val_loss = 1e9
 
-    def train_iteration(e):
-        x, y = get_batch(train_data, context_length, batch_size)
-        # Forward pass with autocasting
-        with autocast(enabled=use_amp): # autocast marks regions for AMP
-            _, loss = model(x, y)
-        loss = loss / grad_accum_steps 
-        if (e+1)% grad_accum_steps == 0:
-            if use_amp:
-                scaler.scale(loss).backward() # Scales loss, calls backward on scaled loss
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # Clip gradients after backward, before unscaling
-                scaler.step(optimizer)         # Unscales gradients and calls optimizer.step()
-                scaler.update()                # Updates the scale for next iteration
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-        return loss
+    def train_epoch(e):
+        for x,y in train_loader:
+            # Move data to device
+            x, y = x.to(device), y.to(device)
+            # Forward pass with autocasting
+            with autocast(enabled=use_amp): # autocast marks regions for AMP
+                _, loss = model(x, y)
+            loss = loss / grad_accum_steps 
+            if (e+1)% grad_accum_steps == 0:
+                if use_amp:
+                    scaler.scale(loss).backward()  # Scales loss, calls backward on scaled loss
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # Clip gradients after backward, before unscaling
+                    scaler.step(optimizer)         # Unscales gradients and calls optimizer.step()
+                    scaler.update()                # Updates the scale for next iteration
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            return loss
 
     if not os.path.exists('models'):
         os.makedirs('models')
@@ -191,12 +188,11 @@ def main():
 
     with tqdm(range(current_iter, max_iters), desc="Training") as pbar:
         for e in pbar:
-            loss = train_iteration(e)
+            loss = train_epoch(e)
             scheduler.step()
             if e % eval_interval == 0:
-                losses = validate_loss(model, train_data, val_data, eval_iters, context_length=context_length, batch_size = batch_size)
+                val_loss = validate_loss(model, val_loader, n_epoch=eval_iters, device=device)
                 # Update the tqdm progress bar with the current loss
-                val_loss = losses[1].item()
                 val_losses.append(val_loss)
                 # Check if learning rate was updated
                 current_lr = optimizer.param_groups[0]['lr'] 
@@ -225,8 +221,7 @@ def main():
                         
 
 
-    print(f"Final training loss: {losses[0].item()}")
-    print(f"Final validation loss: {losses[1].item()}")
+    print(f"Final validation loss: {val_loss.item()}")
     print(f"Best validation loss: {best_val_loss}")
 
     # load the best model
@@ -237,12 +232,12 @@ def main():
     print(''.join(decode(tokenizer, write(model, text, max_words, context_length)[0].tolist())))
 
     # plot the val lossses
-    import matplotlib.pyplot as plt
-    plt.plot(val_losses)
-    plt.xlabel('Epoch')
-    plt.ylabel('Validation Loss')
-    plt.title('Validation Loss evaluated every 500 iterations')
-    plt.show()
+    # import matplotlib.pyplot as plt
+    # plt.plot(val_losses)
+    # plt.xlabel('Epoch')
+    # plt.ylabel('Validation Loss')
+    # plt.title('Validation Loss evaluated every 500 iterations')
+    # plt.show()
 
 
 if __name__ == '__main__':

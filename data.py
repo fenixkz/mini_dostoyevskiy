@@ -5,6 +5,7 @@ import html
 # Теперь очистим 
 import re
 import html
+from torch.utils.data import Dataset
 
 def clean_text(text):
     """
@@ -128,3 +129,17 @@ def get_dataset():
     val_data = clean_text(val_data)
     return data, val_data
     
+
+class TextDataset(Dataset):
+    def __init__(self, data, context_length):
+        self.data = data
+        self.context_length = context_length
+
+    def __len__(self):
+        return len(self.data) - self.context_length
+
+    def __getitem__(self, idx):
+        x = self.data[idx:idx+self.context_length]
+        y = self.data[idx+1:idx+self.context_length+1]
+        return x, y
+
