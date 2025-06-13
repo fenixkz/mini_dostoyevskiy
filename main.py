@@ -135,13 +135,13 @@ def main():
     #### Hyperparameters
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
     context_length = 256
-    batch_size = 8
+    batch_size = 128
     vocab_size = tokenizer.get_vocab_size()
     n_embedding = 128
     n_heads = 4
     n_layers = 8
     dropout = 0.1
-    max_iters = 2000000
+    max_epoch = 20000
     eval_interval = 500
     eval_iters = 1
     learning_rate = 3e-4
@@ -164,11 +164,11 @@ def main():
                                 train_dataset,
                                 batch_size=batch_size,
                                 sampler=train_sampler,
-                                num_workers=8,
+                                num_workers=16,
                                 pin_memory=True,
                                 shuffle=False # shuffle=False is required when using a sampler
                             )
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler, pin_memory=True, num_workers=8)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler, pin_memory=True, num_workers=16)
 
     model = GPT(vocab_size=vocab_size, context_length = context_length, 
                 embedding_dim = n_embedding, num_heads = n_heads, 
@@ -192,6 +192,7 @@ def main():
     def train_epoch(e):
         total_loss = 0 
         num_batches = len(train_loader)
+        print(f"Epoch {e+1}/{max_epoch}, Batches: {num_batches}")
         for x,y in train_loader:
             # Move data to device
             x, y = x.to(device), y.to(device)
@@ -230,7 +231,7 @@ def main():
     rank = dist.get_rank()
 
     # Create the main training loop iterable
-    training_range = range(current_iter, max_iters)
+    training_range = range(current_iter, max_epoch)
 
     # Wrap it in tqdm ONLY for the main process (rank 0)
     if rank == 0:
