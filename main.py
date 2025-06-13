@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 from gpt import GPT
 from data import get_dataset, TextDataset
@@ -196,7 +196,7 @@ def main():
             # Move data to device
             x, y = x.to(device), y.to(device)
             # Forward pass with autocasting
-            with autocast(enabled=use_amp): # autocast marks regions for AMP
+            with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp): # autocast marks regions for AMP
                 _, loss = ddp_model(x, y)
             loss = loss / grad_accum_steps 
             total_loss += loss.item() # Accumulate unscaled loss for logging
@@ -227,46 +227,52 @@ def main():
         if use_amp and 'scaler' in checkpoint: # Load scaler state
             scaler.load_state_dict(checkpoint['scaler'])
 
-    
+    rank = dist.get_rank()
 
-    with tqdm(range(current_iter, max_iters), desc="Training") as pbar:
-        for e in pbar:
-            # Set epoch for distributed samplers
-            train_sampler.set_epoch(e)
-            val_sampler.set_epoch(e)
+    # Create the main training loop iterable
+    training_range = range(current_iter, max_iters)
+
+    # Wrap it in tqdm ONLY for the main process (rank 0)
+    if rank == 0:
+        training_range = tqdm(training_range, desc="Training")
+
+    for e in training_range:
+        # Set epoch for distributed samplers
+        train_sampler.set_epoch(e)
+        val_sampler.set_epoch(e)
+        
+        loss = train_epoch(e)
+        scheduler.step()
+        if e % eval_interval == 0:
+            val_loss = validate_loss(ddp_model, val_loader, n_epoch=eval_iters, device=device)
+            # Update the tqdm progress bar with the current loss
+            val_losses.append(val_loss)
+            # Check if learning rate was updated
+            current_lr = optimizer.param_groups[0]['lr'] 
+            training_range.set_postfix({"val_loss": val_loss, "lr": current_lr})
             
-            loss = train_epoch(e)
-            scheduler.step()
-            if e % eval_interval == 0:
-                val_loss = validate_loss(ddp_model, val_loader, n_epoch=eval_iters, device=device)
-                # Update the tqdm progress bar with the current loss
-                val_losses.append(val_loss)
-                # Check if learning rate was updated
-                current_lr = optimizer.param_groups[0]['lr'] 
-                pbar.set_postfix({"val_loss": val_loss, "lr": current_lr})
-                
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    no_improve = 0
-                    # Only save checkpoint on rank 0
-                    if dist.get_rank() == 0:
-                        checkpoint_data = {
-                            'model': ddp_model.module.state_dict(),
-                            'optim': optimizer.state_dict(),
-                            'current_iter': e,
-                            'best_val_loss': best_val_loss,
-                            'tokenizer_vocab_size': vocab_size
-                        }
-                        if scheduler is not None:
-                            checkpoint_data['scheduler'] = scheduler.state_dict()
-                        if use_amp:
-                            checkpoint_data['scaler'] = scaler.state_dict()
-                        torch.save(checkpoint_data, path)
-                else:
-                    no_improve += 1
-                    if no_improve >= patience:
-                        print(f"Early stopping at epoch {e}")
-                        break
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                no_improve = 0
+                # Only save checkpoint on rank 0
+                if dist.get_rank() == 0:
+                    checkpoint_data = {
+                        'model': ddp_model.module.state_dict(),
+                        'optim': optimizer.state_dict(),
+                        'current_iter': e,
+                        'best_val_loss': best_val_loss,
+                        'tokenizer_vocab_size': vocab_size
+                    }
+                    if scheduler is not None:
+                        checkpoint_data['scheduler'] = scheduler.state_dict()
+                    if use_amp:
+                        checkpoint_data['scaler'] = scaler.state_dict()
+                    torch.save(checkpoint_data, path)
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    print(f"Early stopping at epoch {e}")
+                    break
                         
 
 
