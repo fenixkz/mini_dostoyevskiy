@@ -56,15 +56,32 @@ def write(model, x, max_words, context_length):
 def validate_loss(model, val_loader, device):
     model.eval()
     total_val_loss = 0
+    num_val_batches = len(val_loader)
+    
+    # Create validation progress bar only for rank 0
+    val_pbar = None
+    if dist.get_rank() == 0:
+        val_pbar = tqdm(total=num_val_batches, desc="Validation", leave=False, position=1)
+    
     with torch.no_grad():
-        for x, y in val_loader:
+        for i, (x, y) in enumerate(val_loader):
             x, y = x.to(device), y.to(device)
-            # When calling validate_loss, you pass the ddp_model.
-            # DDP transparently handles the forward pass on each GPU.
             _, loss = model(x, y)
             total_val_loss += loss.item()
+            
+            # Update validation progress bar
+            if dist.get_rank() == 0 and val_pbar is not None:
+                val_pbar.set_postfix({
+                    'val_loss': f'{loss.item():.4f}',
+                    'avg_val_loss': f'{total_val_loss/(i+1):.4f}'
+                })
+                val_pbar.update(1)
+    
+    if dist.get_rank() == 0 and val_pbar is not None:
+        val_pbar.close()
+        
     model.train()
-    return total_val_loss / len(val_loader)
+    return total_val_loss / num_val_batches
 
 def train_tokenizer(train_data, vocab_size):
     cleaned_book_filepath = 'data/books_for_tokenizer.txt'
@@ -167,7 +184,7 @@ def main():
                                 num_workers=16,
                                 pin_memory=True,
                                 shuffle=False # shuffle=False is required when using a sampler
-                            )
+                             )
     val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler, pin_memory=True, num_workers=16)
 
     model = GPT(vocab_size=vocab_size, context_length = context_length, 
@@ -189,33 +206,46 @@ def main():
     model.to(device)
     ddp_model = DDP(model, device_ids=[local_rank])
 
-    def train_epoch(e):
-        total_loss = 0 
-        i = 0
+    def train_epoch(e, epoch_pbar=None):
+        total_loss = 0
         num_batches = len(train_loader)
-        print(f"Epoch {e+1}/{max_epoch}, Batches: {num_batches}")
-        for x,y in train_loader:
-            if dist.get_rank() == 0:
-                print(f"Batch {i}/{num_batches}")
+        
+        # Create epoch progress bar only for rank 0
+        if dist.get_rank() == 0 and epoch_pbar is None:
+            epoch_pbar = tqdm(total=num_batches, desc=f"Epoch {e+1}", leave=False, position=1)
+        
+        for i, (x, y) in enumerate(train_loader):
             # Move data to device
             x, y = x.to(device), y.to(device)
             # Forward pass with autocasting
-            with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp): # autocast marks regions for AMP
+            with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
                 _, loss = ddp_model(x, y)
-            loss = loss / grad_accum_steps 
-            total_loss += loss.item() # Accumulate unscaled loss for logging
-            i+=1
-            if (e+1)% grad_accum_steps == 0:
+            loss = loss / grad_accum_steps
+            total_loss += loss.item()
+            
+            if (e+1) % grad_accum_steps == 0:
                 if use_amp:
-                    scaler.scale(loss).backward()  # Scales loss, calls backward on scaled loss
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # Clip gradients after backward, before unscaling
-                    scaler.step(optimizer)         # Unscales gradients and calls optimizer.step()
-                    scaler.update()                # Updates the scale for next iteration
+                    scaler.scale(loss).backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
                 else:
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+            
+            # Update epoch progress bar
+            if dist.get_rank() == 0 and epoch_pbar is not None:
+                epoch_pbar.set_postfix({
+                    'batch_loss': f'{loss.item():.4f}',
+                    'avg_loss': f'{total_loss/(i+1):.4f}'
+                })
+                epoch_pbar.update(1)
+        
+        if dist.get_rank() == 0 and epoch_pbar is not None:
+            epoch_pbar.close()
+            
         return total_loss / num_batches
 
     if not os.path.exists('models'):
@@ -234,27 +264,42 @@ def main():
 
     rank = dist.get_rank()
 
-    # Create the main training loop iterable
-    training_range = range(current_iter, max_epoch)
-
-    # Wrap it in tqdm ONLY for the main process (rank 0)
+    # Create the main training loop with improved progress tracking
     if rank == 0:
-        training_range = tqdm(training_range, desc="Training")
-
-    for e in training_range:
+        main_pbar = tqdm(total=max_epoch-current_iter, desc="Overall Training Progress", position=0)
+    
+    for e in range(current_iter, max_epoch):
         # Set epoch for distributed samplers
         train_sampler.set_epoch(e)
         val_sampler.set_epoch(e)
         
-        loss = train_epoch(e)
+        # Train one epoch
+        epoch_loss = train_epoch(e)
         scheduler.step()
+        
+        # Update main progress bar
+        if rank == 0:
+            current_lr = optimizer.param_groups[0]['lr']
+            main_pbar.set_postfix({
+                'epoch': f'{e+1}/{max_epoch}',
+                'train_loss': f'{epoch_loss:.4f}',
+                'lr': f'{current_lr:.2e}'
+            })
+            main_pbar.update(1)
+        
+        # Validation
         if e % eval_interval == 0:
-            val_loss = validate_loss(ddp_model, val_loader, n_epoch=eval_iters, device=device)
-            # Update the tqdm progress bar with the current loss
+            val_loss = validate_loss(ddp_model, val_loader, device=device)
             val_losses.append(val_loss)
-            # Check if learning rate was updated
-            current_lr = optimizer.param_groups[0]['lr'] 
-            training_range.set_postfix({"val_loss": val_loss, "lr": current_lr})
+            
+            # Update main progress bar with validation info
+            if rank == 0:
+                main_pbar.set_postfix({
+                    'epoch': f'{e+1}/{max_epoch}',
+                    'train_loss': f'{epoch_loss:.4f}',
+                    'val_loss': f'{val_loss:.4f}',
+                    'lr': f'{current_lr:.2e}'
+                })
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -273,11 +318,20 @@ def main():
                     if use_amp:
                         checkpoint_data['scaler'] = scaler.state_dict()
                     torch.save(checkpoint_data, path)
+                    
+                    # Update progress bar with checkpoint info
+                    main_pbar.set_description(f"Training (✓ Checkpoint saved)")
             else:
                 no_improve += 1
                 if no_improve >= patience:
-                    print(f"Early stopping at epoch {e}")
+                    if rank == 0:
+                        main_pbar.set_description(f"Training (Early stopping at epoch {e+1})")
+                        main_pbar.close()
                     break
+    
+    # Close main progress bar if training completed normally
+    if rank == 0:
+        main_pbar.close()
                         
 
 
