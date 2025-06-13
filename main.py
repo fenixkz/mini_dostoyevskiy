@@ -160,14 +160,6 @@ def main():
     val_dataset = TextDataset(val_data, context_length)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
     
-    if dist.get_rank() == 0: # Only print from the main process to avoid clutter
-        print("\n--- DEBUGGING DATALOADER LENGTH ---")
-        print(f"Total items in train_dataset: {len(train_dataset)}")
-        print(f"Items per GPU (sampler length): {len(train_sampler)}")
-        print(f"Configured batch_size: {batch_size}")
-        print(f"CALCULATED len(train_loader) should be: {len(train_sampler) // batch_size}")
-        print("-----------------------------------\n")
-
     train_loader = DataLoader(
                                 train_dataset,
                                 batch_size=batch_size,
@@ -199,9 +191,12 @@ def main():
 
     def train_epoch(e):
         total_loss = 0 
+        i = 0
         num_batches = len(train_loader)
         print(f"Epoch {e+1}/{max_epoch}, Batches: {num_batches}")
         for x,y in train_loader:
+            if dist.get_rank() == 0:
+                print(f"Batch {i}/{num_batches}")
             # Move data to device
             x, y = x.to(device), y.to(device)
             # Forward pass with autocasting
@@ -209,6 +204,7 @@ def main():
                 _, loss = ddp_model(x, y)
             loss = loss / grad_accum_steps 
             total_loss += loss.item() # Accumulate unscaled loss for logging
+            i+=1
             if (e+1)% grad_accum_steps == 0:
                 if use_amp:
                     scaler.scale(loss).backward()  # Scales loss, calls backward on scaled loss
