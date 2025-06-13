@@ -53,18 +53,18 @@ def write(model, x, max_words, context_length):
     model.train()
     return x
 
-def validate_loss(model, val_loader, n_epoch, device):
+def validate_loss(model, val_loader, device):
     model.eval()
+    total_val_loss = 0
     with torch.no_grad():
-        val_losses = torch.zeros(n_epoch)
-        for k in range(n_epoch):
-            for x, y in val_loader:
-                # Move data to device
-                x, y = x.to(device), y.to(device)
-                _, loss = model.forward(x, y)
-                val_losses[k] = loss.item()
+        for x, y in val_loader:
+            x, y = x.to(device), y.to(device)
+            # When calling validate_loss, you pass the ddp_model.
+            # DDP transparently handles the forward pass on each GPU.
+            _, loss = model(x, y)
+            total_val_loss += loss.item()
     model.train()
-    return val_losses.mean()
+    return total_val_loss / len(val_loader)
 
 def train_tokenizer(train_data, vocab_size):
     cleaned_book_filepath = 'data/books_for_tokenizer.txt'
@@ -114,11 +114,18 @@ def main():
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     vocab_size = 10000
     train_data, val_data = get_dataset()
-    if os.path.exists(f'data/tokenizer/tokenizer_{vocab_size}.json'):
-        tokenizer = Tokenizer.from_file(f'data/tokenizer/tokenizer_{vocab_size}.json')
-    else:
-        tokenizer = train_tokenizer(train_data, vocab_size)
-    
+    if dist.get_rank() == 0:
+        # This code will only be run by the main process
+        if not os.path.exists(f'data/tokenizer/tokenizer_{vocab_size}.json'):
+            # Ensure the data directory exists before any process needs it
+            os.makedirs('data/tokenizer', exist_ok=True)
+            train_tokenizer(train_data, vocab_size)
+
+    # All processes wait here until rank 0 has finished preparing the data
+    dist.barrier()
+
+    # Now, all processes can safely load the tokenizer file
+    tokenizer = Tokenizer.from_file(f'data/tokenizer/tokenizer_{vocab_size}.json')
     train_data = encode(tokenizer, train_data)
     val_data = encode(tokenizer, val_data)
     
@@ -183,6 +190,8 @@ def main():
     ddp_model = DDP(model, device_ids=[local_rank])
 
     def train_epoch(e):
+        total_loss = 0 
+        num_batches = len(train_loader)
         for x,y in train_loader:
             # Move data to device
             x, y = x.to(device), y.to(device)
@@ -190,6 +199,7 @@ def main():
             with autocast(enabled=use_amp): # autocast marks regions for AMP
                 _, loss = ddp_model(x, y)
             loss = loss / grad_accum_steps 
+            total_loss += loss.item() # Accumulate unscaled loss for logging
             if (e+1)% grad_accum_steps == 0:
                 if use_amp:
                     scaler.scale(loss).backward()  # Scales loss, calls backward on scaled loss
@@ -201,7 +211,7 @@ def main():
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            return loss
+        return total_loss / num_batches
 
     if not os.path.exists('models'):
         os.makedirs('models')
@@ -241,7 +251,7 @@ def main():
                     # Only save checkpoint on rank 0
                     if dist.get_rank() == 0:
                         checkpoint_data = {
-                            'model': model.state_dict(),
+                            'model': ddp_model.module.state_dict(),
                             'optim': optimizer.state_dict(),
                             'current_iter': e,
                             'best_val_loss': best_val_loss,
