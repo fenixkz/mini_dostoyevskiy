@@ -16,7 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 CONTINUE_TRAINING = False
 
@@ -123,7 +123,7 @@ def main():
 
     # All processes wait here until rank 0 has finished preparing the data
     dist.barrier()
-
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     # Now, all processes can safely load the tokenizer file
     tokenizer = Tokenizer.from_file(f'data/tokenizer/tokenizer_{vocab_size}.json')
     train_data = encode(tokenizer, train_data)
