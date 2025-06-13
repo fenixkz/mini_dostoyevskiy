@@ -13,9 +13,23 @@ import os
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
 from transformers import get_cosine_schedule_with_warmup
 from torch.utils.data import Dataset, DataLoader
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 CONTINUE_TRAINING = False
+
+def setup_ddp():
+    """Initializes the distributed process group."""
+    dist.init_process_group(backend="nccl")
+    # Get the rank and local rank from environment variables set by torchrun
+    # local_rank is the GPU ID for this specific process
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    torch.cuda.set_device(local_rank)
+    print(f"Started DDP process on rank {dist.get_rank()} for GPU {local_rank}.")
+
+
 
 def encode(tokenizer: ByteLevelBPETokenizer, text):
     return tokenizer.encode(text).ids
@@ -94,7 +108,10 @@ def train_tokenizer(train_data, vocab_size):
     return byte_level_tokenizer
 
 def main():
-    
+    setup_ddp()
+
+    # Get the local rank for device placement
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     vocab_size = 10000
     train_data, val_data = get_dataset()
     if os.path.exists(f'data/tokenizer/tokenizer_{vocab_size}.json'):
@@ -109,7 +126,7 @@ def main():
     print(f'Validation set contains: {len(val_data)} tokens')
 
     #### Hyperparameters
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
     context_length = 256
     batch_size = 8
     vocab_size = tokenizer.get_vocab_size()
@@ -131,9 +148,20 @@ def main():
     train_data = torch.tensor(train_data, dtype=torch.long)  # Keep on CPU
     val_data = torch.tensor(val_data, dtype=torch.long)      # Keep on CPU
     train_dataset = TextDataset(train_data, context_length)
+    train_sampler = DistributedSampler(train_dataset)
+
     val_dataset = TextDataset(val_data, context_length)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=8)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=8)
+    val_sampler = DistributedSampler(val_dataset, shuffle=False)
+    
+    train_loader = DataLoader(
+                                train_dataset,
+                                batch_size=batch_size,
+                                sampler=train_sampler,
+                                num_workers=8,
+                                pin_memory=True,
+                                shuffle=False # shuffle=False is required when using a sampler
+                            )
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler, pin_memory=True, num_workers=8)
 
     model = GPT(vocab_size=vocab_size, context_length = context_length, 
                 embedding_dim = n_embedding, num_heads = n_heads, 
@@ -150,6 +178,9 @@ def main():
         scaler = GradScaler()
     val_losses = []
     best_val_loss = 1e9
+    
+    model.to(device)
+    ddp_model = DDP(model, device_ids=[local_rank])
 
     def train_epoch(e):
         for x,y in train_loader:
@@ -157,7 +188,7 @@ def main():
             x, y = x.to(device), y.to(device)
             # Forward pass with autocasting
             with autocast(enabled=use_amp): # autocast marks regions for AMP
-                _, loss = model(x, y)
+                _, loss = ddp_model(x, y)
             loss = loss / grad_accum_steps 
             if (e+1)% grad_accum_steps == 0:
                 if use_amp:
@@ -186,12 +217,18 @@ def main():
         if use_amp and 'scaler' in checkpoint: # Load scaler state
             scaler.load_state_dict(checkpoint['scaler'])
 
+    
+
     with tqdm(range(current_iter, max_iters), desc="Training") as pbar:
         for e in pbar:
+            # Set epoch for distributed samplers
+            train_sampler.set_epoch(e)
+            val_sampler.set_epoch(e)
+            
             loss = train_epoch(e)
             scheduler.step()
             if e % eval_interval == 0:
-                val_loss = validate_loss(model, val_loader, n_epoch=eval_iters, device=device)
+                val_loss = validate_loss(ddp_model, val_loader, n_epoch=eval_iters, device=device)
                 # Update the tqdm progress bar with the current loss
                 val_losses.append(val_loss)
                 # Check if learning rate was updated
@@ -201,18 +238,20 @@ def main():
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     no_improve = 0
-                    checkpoint_data = {
-                        'model': model.state_dict(),
-                        'optim': optimizer.state_dict(),
-                        'current_iter': e,
-                        'best_val_loss': best_val_loss,
-                        'tokenizer_vocab_size': vocab_size 
-                    }
-                    if scheduler is not None:
-                        checkpoint_data['scheduler'] = scheduler.state_dict()
-                    if use_amp:
-                        checkpoint_data['scaler'] = scaler.state_dict() 
-                    torch.save(checkpoint_data, path)
+                    # Only save checkpoint on rank 0
+                    if dist.get_rank() == 0:
+                        checkpoint_data = {
+                            'model': model.state_dict(),
+                            'optim': optimizer.state_dict(),
+                            'current_iter': e,
+                            'best_val_loss': best_val_loss,
+                            'tokenizer_vocab_size': vocab_size
+                        }
+                        if scheduler is not None:
+                            checkpoint_data['scheduler'] = scheduler.state_dict()
+                        if use_amp:
+                            checkpoint_data['scaler'] = scaler.state_dict()
+                        torch.save(checkpoint_data, path)
                 else:
                     no_improve += 1
                     if no_improve >= patience:
@@ -221,15 +260,20 @@ def main():
                         
 
 
-    print(f"Final validation loss: {val_loss.item()}")
-    print(f"Best validation loss: {best_val_loss}")
+    # Only do inference on rank 0
+    if dist.get_rank() == 0:
+        print(f"Final validation loss: {val_loss.item()}")
+        print(f"Best validation loss: {best_val_loss}")
 
-    # load the best model
-    checkpoint = torch.load(path)
-    model.load_state_dict(checkpoint['model'])
-    max_words = 250
-    text = torch.tensor([encode(tokenizer, "Я")], dtype=torch.long).view(1,1).to(device)
-    print(''.join(decode(tokenizer, write(model, text, max_words, context_length)[0].tolist())))
+        # load the best model
+        checkpoint = torch.load(path)
+        model.load_state_dict(checkpoint['model'])
+        max_words = 250
+        text = torch.tensor([encode(tokenizer, "Я")], dtype=torch.long).view(1,1).to(device)
+        print(''.join(decode(tokenizer, write(model, text, max_words, context_length)[0].tolist())))
+    
+    # Cleanup DDP
+    dist.destroy_process_group()
 
     # plot the val lossses
     # import matplotlib.pyplot as plt
