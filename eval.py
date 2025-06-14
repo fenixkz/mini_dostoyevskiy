@@ -181,8 +181,7 @@ def write(model, initial_token_ids, max_new_tokens, context_length,
 
 print("Hello! This is a mini-Dostoyevskiy GPT based model. Please to evaluate the model, write the vocabulary size: ")
 vocab_size = int(input())
-print("Also, please write the beginning of a story you want it to finish ")
-start = input()
+
 
 
 tokenizer = Tokenizer.from_file(f'data/tokenizer/tokenizer_{vocab_size}.json')
@@ -215,7 +214,8 @@ model.load_state_dict(torch.load(path)['model'])
 
 # Generate text
 max_words = 200
-encoded = encode(tokenizer, start)
+text = "Родина "
+encoded = encode(tokenizer, text)
 text = torch.tensor(encoded, dtype=torch.long, device=device).unsqueeze(0).to(device)
 generated = write(
     model, text, max_words, context_length,
