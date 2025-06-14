@@ -169,6 +169,7 @@ def main():
     grad_accum_steps = 4
     ####
 
+    ##################################### Dataloader initialization #############################################
     train_data = torch.tensor(train_data, dtype=torch.long)  # Keep on CPU
     val_data = torch.tensor(val_data, dtype=torch.long)      # Keep on CPU
     train_dataset = TextDataset(train_data, context_length)
@@ -186,6 +187,8 @@ def main():
                                 shuffle=False # shuffle=False is required when using a sampler
                              )
     val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler, pin_memory=True, num_workers=16)
+    ############################################ END   ##########################################################
+
 
     model = GPT(vocab_size=vocab_size, context_length = context_length, 
                 embedding_dim = n_embedding, num_heads = n_heads, 
@@ -193,13 +196,14 @@ def main():
     print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
-        T_0=10,  
-        T_mult=1,                  
-        eta_min=3e-6               
-    )
+                                                                        optimizer,
+                                                                        T_0=5000, # Period of lr cycling, per single iteration  
+                                                                        T_mult=1,                  
+                                                                        eta_min=3e-6               
+                                                                    )
     if use_amp:
         scaler = GradScaler()
+    
     val_losses = []
     best_val_loss = 1e9
     
@@ -217,21 +221,26 @@ def main():
         for i, (x, y) in enumerate(train_loader):
             # Move data to device
             x, y = x.to(device), y.to(device)
+            
             # Forward pass with autocasting
             with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
                 _, loss = ddp_model(x, y)
+            
             loss = loss / grad_accum_steps
             total_loss += loss.item()
-            
-            if (e+1) % grad_accum_steps == 0:
+            scheduler.step() # Update learning rate each iteration
+            if use_amp: # Call backward, but do not step the optimizer
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
+
+            if (i+1) % grad_accum_steps == 0: # Accumulate gradients over multiple iterations
                 if use_amp:
-                    scaler.scale(loss).backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
                     scaler.step(optimizer)
                     scaler.update()
                 else:
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             
@@ -333,30 +342,9 @@ def main():
     if rank == 0:
         main_pbar.close()
                         
-
-
-    # Only do inference on rank 0
-    if dist.get_rank() == 0:
-        print(f"Final validation loss: {val_loss.item()}")
-        print(f"Best validation loss: {best_val_loss}")
-
-        # load the best model
-        checkpoint = torch.load(path)
-        model.load_state_dict(checkpoint['model'])
-        max_words = 250
-        text = torch.tensor([encode(tokenizer, "Я")], dtype=torch.long).view(1,1).to(device)
-        print(''.join(decode(tokenizer, write(model, text, max_words, context_length)[0].tolist())))
     
     # Cleanup DDP
     dist.destroy_process_group()
-
-    # plot the val lossses
-    # import matplotlib.pyplot as plt
-    # plt.plot(val_losses)
-    # plt.xlabel('Epoch')
-    # plt.ylabel('Validation Loss')
-    # plt.title('Validation Loss evaluated every 500 iterations')
-    # plt.show()
 
 
 if __name__ == '__main__':
