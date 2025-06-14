@@ -228,14 +228,15 @@ def main():
             
             loss = loss / grad_accum_steps
             total_loss += loss.item()
-            scheduler.step() # Update learning rate each iteration
+            
             if use_amp: # Call backward, but do not step the optimizer
                 scaler.scale(loss).backward()
             else:
                 loss.backward()
 
-            if (i+1) % grad_accum_steps == 0: # Accumulate gradients over multiple iterations
+            if (i+1) % grad_accum_steps == 0: # Accumulate gradients over multiple iterations and step the optimizer
                 if use_amp:
+                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
                     scaler.step(optimizer)
                     scaler.update()
@@ -243,7 +244,7 @@ def main():
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            
+                scheduler.step() # Update learning rate each iteration
             # Update epoch progress bar
             if dist.get_rank() == 0 and epoch_pbar is not None:
                 epoch_pbar.set_postfix({
