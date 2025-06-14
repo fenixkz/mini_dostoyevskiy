@@ -204,7 +204,7 @@ no_improve = 0
 current_iter = 0
 use_amp = True if device == 'cuda' else False
 ####
-path = f'models/checkpoint_128_{context_length}_4_{n_layers}_best_{vocab_size}.pth'
+path = f'models/checkpoint_128_{context_length}_4_{n_layers}_best.pth'
 
 model = GPT(vocab_size=vocab_size, context_length = context_length, 
             embedding_dim = n_embedding, num_heads = n_heads, 
