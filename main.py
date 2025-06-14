@@ -129,7 +129,7 @@ def main():
 
     # Get the local rank for device placement
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    vocab_size = 10000
+    vocab_size = 7000
     train_data, val_data = get_dataset()
     if dist.get_rank() == 0:
         # This code will only be run by the main process
