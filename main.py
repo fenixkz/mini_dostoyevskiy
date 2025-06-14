@@ -194,7 +194,7 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
-        T_0=2500,  
+        T_0=10,  
         T_mult=1,                  
         eta_min=3e-6               
     )
