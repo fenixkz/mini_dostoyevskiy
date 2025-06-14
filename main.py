@@ -159,7 +159,7 @@ def main():
     n_layers = 8
     dropout = 0.1
     max_epoch = 20000
-    eval_interval = 500
+    eval_interval = 1
     eval_iters = 1
     learning_rate = 3e-4
     patience = 50
