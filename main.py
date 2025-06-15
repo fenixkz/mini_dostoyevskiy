@@ -157,7 +157,7 @@ def main():
     batch_size = 128
     vocab_size = tokenizer.get_vocab_size()
     n_embedding = 128
-    n_heads = 6
+    n_heads = 8
     n_layers = 12
     dropout = 0.3
     max_epoch = 20000
