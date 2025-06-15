@@ -16,6 +16,10 @@ from torch.utils.data import Dataset, DataLoader
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
+import time
+import json
+
+# Set tokenizer parallelism to true
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 CONTINUE_TRAINING = False
@@ -28,8 +32,6 @@ def setup_ddp():
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     torch.cuda.set_device(local_rank)
     print(f"Started DDP process on rank {dist.get_rank()} for GPU {local_rank}.")
-
-
 
 def encode(tokenizer: ByteLevelBPETokenizer, text):
     return tokenizer.encode(text).ids
@@ -149,15 +151,15 @@ def main():
     print(f'Training set contains: {len(train_data)} tokens')
     print(f'Validation set contains: {len(val_data)} tokens')
 
-    #### Hyperparameters
+    ############ Hyperparameters ################
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
     context_length = 256
-    batch_size = 64
+    batch_size = 128
     vocab_size = tokenizer.get_vocab_size()
-    n_embedding = 256
-    n_heads = 8
-    n_layers = 16
-    dropout = 0.1
+    n_embedding = 128
+    n_heads = 6
+    n_layers = 12
+    dropout = 0.3
     max_epoch = 20000
     eval_interval = 1
     eval_iters = 1
@@ -167,7 +169,36 @@ def main():
     current_iter = 0
     use_amp = True if device == 'cuda' else False
     grad_accum_steps = 4
-    ####
+    ##############################################
+
+    path = f"models/{time.strftime('%Y-%m-%d_%H-%M-%S')}"
+    os.makedirs(path, exist_ok=True)
+    # Save hyperparameters to a json file
+    # Create hyperparameters dictionary
+    hyperparameters = {
+        'device': device,
+        'context_length': context_length,
+        'batch_size': batch_size,
+        'vocab_size': vocab_size,
+        'n_embedding': n_embedding,
+        'n_heads': n_heads,
+        'n_layers': n_layers,
+        'dropout': dropout,
+        'max_epoch': max_epoch,
+        'eval_interval': eval_interval,
+        'eval_iters': eval_iters,
+        'learning_rate': learning_rate,
+        'patience': patience,
+        'no_improve': no_improve,
+        'current_iter': current_iter,
+        'use_amp': use_amp,
+        'grad_accum_steps': grad_accum_steps
+    }
+    
+    # Save hyperparameters to a json file
+    with open(os.path.join(path, 'config.json'), 'w') as f:
+        json.dump(hyperparameters, f, indent=2)
+
 
     ##################################### Dataloader initialization #############################################
     train_data = torch.tensor(train_data, dtype=torch.long)  # Keep on CPU
@@ -187,13 +218,15 @@ def main():
                                 shuffle=False # shuffle=False is required when using a sampler
                              )
     val_loader = DataLoader(val_dataset, batch_size=batch_size, sampler=val_sampler, pin_memory=True, num_workers=16)
-    ############################################ END   ##########################################################
+    ############################################################################################################
 
 
     model = GPT(vocab_size=vocab_size, context_length = context_length, 
                 embedding_dim = n_embedding, num_heads = n_heads, 
                 num_layers = n_layers, dropout=dropout).to(device)
+    
     print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
+    
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                                                                         optimizer,
@@ -258,12 +291,8 @@ def main():
             
         return total_loss / num_batches
 
-    if not os.path.exists('models'):
-        os.makedirs('models')
-    path = f'models/checkpoint_{n_embedding}_{context_length}_{n_heads}_{n_layers}.pth'
-
     if CONTINUE_TRAINING:
-        checkpoint = torch.load(path)
+        checkpoint = torch.load(os.path.join(path, 'checkpoint.pth'))
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optim'])
         scheduler.load_state_dict(checkpoint['scheduler'])
@@ -287,7 +316,7 @@ def main():
         epoch_loss = train_epoch(e)
         scheduler.step()
         
-        # Update main progress bar
+        # Update main progress bar and save checkpoint
         if rank == 0:
             current_lr = optimizer.param_groups[0]['lr']
             main_pbar.set_postfix({
@@ -296,7 +325,19 @@ def main():
                 'lr': f'{current_lr:.2e}'
             })
             main_pbar.update(1)
-        
+            checkpoint_data = {
+                                'model': ddp_model.module.state_dict(),
+                                'optim': optimizer.state_dict(),
+                                'current_iter': e,
+                                'best_val_loss': best_val_loss,
+                                'train_loss': epoch_loss,
+                              }
+            if scheduler is not None:
+                checkpoint_data['scheduler'] = scheduler.state_dict()
+            if use_amp:
+                checkpoint_data['scaler'] = scaler.state_dict()
+            torch.save(checkpoint_data, os.path.join(path, 'checkpoint.pth'))
+
         # Validation
         if e % eval_interval == 0:
             val_loss = validate_loss(ddp_model, val_loader, device=device)
@@ -316,21 +357,7 @@ def main():
                 no_improve = 0
                 # Only save checkpoint on rank 0
                 if dist.get_rank() == 0:
-                    checkpoint_data = {
-                        'model': ddp_model.module.state_dict(),
-                        'optim': optimizer.state_dict(),
-                        'current_iter': e,
-                        'best_val_loss': best_val_loss,
-                        'tokenizer_vocab_size': vocab_size
-                    }
-                    if scheduler is not None:
-                        checkpoint_data['scheduler'] = scheduler.state_dict()
-                    if use_amp:
-                        checkpoint_data['scaler'] = scaler.state_dict()
-                    torch.save(checkpoint_data, path)
-                    
-                    # Update progress bar with checkpoint info
-                    main_pbar.set_description(f"Training (✓ Checkpoint saved)")
+                    torch.save(ddp_model.module.state_dict(), os.path.join(path, 'best_model.pth'))
             else:
                 no_improve += 1
                 if no_improve >= patience:
