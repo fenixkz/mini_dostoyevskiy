@@ -78,6 +78,7 @@ def validate_loss(model, val_loader, device):
                     'avg_val_loss': f'{total_val_loss/(i+1):.4f}'
                 })
                 val_pbar.update(1)
+            break
     
     if dist.get_rank() == 0 and val_pbar is not None:
         val_pbar.close()
@@ -258,7 +259,7 @@ def main():
 
     def train_epoch(e, epoch_pbar=None):
         nonlocal best_val_loss, no_improve
-        
+
         total_loss = 0
         num_batches = len(train_loader)
         stop_training = False
