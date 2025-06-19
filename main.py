@@ -154,7 +154,7 @@ def main():
     ############ Hyperparameters ################
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
     context_length = 512
-    batch_size = 128
+    batch_size = 64
     vocab_size = tokenizer.get_vocab_size()
     n_embedding = 256
     n_heads = 8
