@@ -257,6 +257,8 @@ def main():
         torch.save(checkpoint_data, os.path.join(path, 'checkpoint.pth'))
 
     def train_epoch(e, epoch_pbar=None):
+        nonlocal best_val_loss, no_improve
+        
         total_loss = 0
         num_batches = len(train_loader)
         stop_training = False
