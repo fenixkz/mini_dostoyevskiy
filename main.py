@@ -297,6 +297,7 @@ def main():
             
             if i % eval_interval == 0 and i != 0:
                 val_loss = validate_loss(ddp_model, val_loader, device=device)
+                save_checkpoint()
                 # Save validation loss as the best if it is the best
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -321,7 +322,7 @@ def main():
                         'val_loss': f'{val_loss:.4f}'
                     })
                 epoch_pbar.update(1)
-                save_checkpoint()
+                
 
         if dist.get_rank() == 0 and epoch_pbar is not None:
             epoch_pbar.close()
