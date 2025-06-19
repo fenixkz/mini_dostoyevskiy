@@ -237,9 +237,8 @@ def main():
     if use_amp:
         scaler = GradScaler()
     
-    val_losses = []
     best_val_loss = 1e9
-    
+    epoch_loss = 1e9
     model.to(device)
     ddp_model = DDP(model, device_ids=[local_rank])
 
