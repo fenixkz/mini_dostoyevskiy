@@ -201,9 +201,9 @@ print(f"The best model with vocab size {vocab_size} is in folder: {best_model_pa
 
 config = json.load(open(os.path.join(best_model_path, "config.json"), "r", encoding="utf-8"))
 context_length = config.get("context_length")
-n_embedding = config.get("embedding_dim")
-n_heads = config.get("num_heads")
-n_layers = config.get("num_layers")
+n_embedding = config.get("n_embedding")
+n_heads = config.get("n_heads")
+n_layers = config.get("n_layers")
 dropout = config.get("dropout")
 
 #### Hyperparameters
