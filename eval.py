@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import os
 import time
 import torch
 import torch.nn.functional as F
 from gpt import GPT
 from data import get_dataset
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
-
+import json
 
 def encode(tokenizer: ByteLevelBPETokenizer, text):
     return tokenizer.encode(text).ids
@@ -170,47 +170,53 @@ def write(model, initial_token_ids, max_new_tokens, context_length,
             
             # 9. Append chosen token and continue
             x = torch.cat((x, next_token), dim=1)
-
-            # Optional: Early stop if EOS token is generated
-            # if tokenizer is not None and next_token.item() == tokenizer.eos_token_id:
-            # print("EOS token generated. Stopping.")
-            # break
-            
     return x
 
 
 print("Hello! This is a mini-Dostoyevskiy GPT based model. Please to evaluate the model, write the vocabulary size: ")
 vocab_size = int(input())
 
-
-
 tokenizer = Tokenizer.from_file(f'data/tokenizer/tokenizer_{vocab_size}.json')
+
+best_val_loss = float('inf')
+# Iterate over all folders in path models/
+models_path = 'models/'
+for folder_name in os.listdir(models_path):
+    folder_path = os.path.join(models_path, folder_name)
+    if os.path.isdir(folder_path):
+        # Read vocab_size from config.json in the folder
+        config_path = os.path.join(folder_path, "config.json")
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        folder_vocab_size = config.get("vocab_size")
+        if folder_vocab_size == vocab_size:
+            # Read best_val_loss from torch checkpoint
+            checkpoint_path = os.path.join(folder_path, "checkpoint.pth")
+            checkpoint = torch.load(checkpoint_path)
+            folder_best_val_loss = checkpoint.get("best_val_loss")
+            if folder_best_val_loss < best_val_loss:
+                best_val_loss = folder_best_val_loss
+                best_model_path = folder_path
+print(f"The best model with vocab size {vocab_size} is in folder: {best_model_path} with validation loss: {best_val_loss:.4f}")
+
+config = json.load(open(os.path.join(best_model_path, "config.json"), "r", encoding="utf-8"))
+context_length = config.get("context_length")
+n_embedding = config.get("embedding_dim")
+n_heads = config.get("num_heads")
+n_layers = config.get("num_layers")
+dropout = config.get("dropout")
 
 #### Hyperparameters
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-context_length = 256
-vocab_size = tokenizer.get_vocab_size()
-n_embedding = 128
-n_heads = 4
-n_layers = 8
-dropout = 0.05
-max_iters = 200000
-eval_interval = 500
-eval_iters = 20
-learning_rate = 3e-4
-patience = 50
-no_improve = 0
-current_iter = 0
 use_amp = True if device == 'cuda' else False
 ####
-path = f'models/checkpoint_128_{context_length}_4_{n_layers}.pth'
 
 model = GPT(vocab_size=vocab_size, context_length = context_length, 
             embedding_dim = n_embedding, num_heads = n_heads, 
             num_layers = n_layers, dropout=dropout).to(device)
 
 # print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
-model.load_state_dict(torch.load(path)['model'])
+model.load_state_dict(torch.load(os.path.join(best_model_path, "best_model.pth")))
 
 # Generate text
 max_words = 200
