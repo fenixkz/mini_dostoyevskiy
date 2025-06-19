@@ -131,7 +131,7 @@ def main():
 
     # Get the local rank for device placement
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    vocab_size = 7000
+    vocab_size = 15000
     train_data, val_data = get_dataset()
     if dist.get_rank() == 0:
         # This code will only be run by the main process
@@ -153,13 +153,13 @@ def main():
 
     ############ Hyperparameters ################
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
-    context_length = 256
+    context_length = 512
     batch_size = 128
     vocab_size = tokenizer.get_vocab_size()
-    n_embedding = 128
+    n_embedding = 256
     n_heads = 8
-    n_layers = 12
-    dropout = 0.3
+    n_layers = 8
+    dropout = 0.25
     max_epoch = 20000
     eval_interval = 1
     eval_iters = 1
