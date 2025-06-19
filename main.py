@@ -78,7 +78,6 @@ def validate_loss(model, val_loader, device):
                     'avg_val_loss': f'{total_val_loss/(i+1):.4f}'
                 })
                 val_pbar.update(1)
-            break
     
     if dist.get_rank() == 0 and val_pbar is not None:
         val_pbar.close()
@@ -239,6 +238,7 @@ def main():
         scaler = GradScaler()
     
     best_val_loss = 1e9
+    val_loss = 1e9
     epoch_loss = 1e9
     model.to(device)
     ddp_model = DDP(model, device_ids=[local_rank])
@@ -258,7 +258,7 @@ def main():
         torch.save(checkpoint_data, os.path.join(path, 'checkpoint.pth'))
 
     def train_epoch(e, epoch_pbar=None):
-        nonlocal best_val_loss, no_improve
+        nonlocal best_val_loss, no_improve, val_loss
 
         total_loss = 0
         num_batches = len(train_loader)
@@ -294,16 +294,8 @@ def main():
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 scheduler.step() # Update learning rate each iteration
-            # Update epoch progress bar
-            if dist.get_rank() == 0 and epoch_pbar is not None:
-                epoch_pbar.set_postfix({
-                    'batch_loss': f'{loss.item():.4f}',
-                    'avg_loss': f'{total_loss/(i+1):.4f}'
-                })
-                epoch_pbar.update(1)
-                save_checkpoint()
-
-            if i % eval_interval == 0:
+            
+            if i % eval_interval == 0 and i != 0:
                 val_loss = validate_loss(ddp_model, val_loader, device=device)
                 # Save validation loss as the best if it is the best
                 if val_loss < best_val_loss:
@@ -320,16 +312,17 @@ def main():
                             main_pbar.close()
                         stop_training = True
                         break
-                
-                if dist.get_rank() == 0 and epoch_pbar is not None:
-                    epoch_pbar.set_postfix({
+            
+            # Update epoch progress bar
+            if dist.get_rank() == 0 and epoch_pbar is not None:
+                epoch_pbar.set_postfix({
                         'batch_loss': f'{loss.item():.4f}',
                         'avg_loss': f'{total_loss/(i+1):.4f}',
                         'val_loss': f'{val_loss:.4f}'
                     })
-                    epoch_pbar.update(1)
+                epoch_pbar.update(1)
+                save_checkpoint()
 
-        
         if dist.get_rank() == 0 and epoch_pbar is not None:
             epoch_pbar.close()
             
