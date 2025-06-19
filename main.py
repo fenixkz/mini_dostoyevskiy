@@ -161,10 +161,10 @@ def main():
     n_layers = 8
     dropout = 0.25
     max_epoch = 20000
-    eval_interval = 1
+    eval_interval = 2500 # Not epochs, but iterations in training (within epoch)
     eval_iters = 1
     learning_rate = 3e-4
-    patience = 50
+    patience = 5
     no_improve = 0
     current_iter = 0
     use_amp = True if device == 'cuda' else False
@@ -243,10 +243,24 @@ def main():
     model.to(device)
     ddp_model = DDP(model, device_ids=[local_rank])
 
+    def save_checkpoint():
+        checkpoint_data = {
+                            'model': ddp_model.module.state_dict(),
+                            'optim': optimizer.state_dict(),
+                            'current_iter': e,
+                            'best_val_loss': best_val_loss,
+                            'train_loss': epoch_loss,
+                            }
+        if scheduler is not None:
+            checkpoint_data['scheduler'] = scheduler.state_dict()
+        if use_amp:
+            checkpoint_data['scaler'] = scaler.state_dict()
+        torch.save(checkpoint_data, os.path.join(path, 'checkpoint.pth'))
+
     def train_epoch(e, epoch_pbar=None):
         total_loss = 0
         num_batches = len(train_loader)
-        
+        stop_training = False
         # Create epoch progress bar only for rank 0
         if dist.get_rank() == 0 and epoch_pbar is None:
             epoch_pbar = tqdm(total=num_batches, desc=f"Epoch {e+1}", leave=False, position=1)
@@ -285,11 +299,39 @@ def main():
                     'avg_loss': f'{total_loss/(i+1):.4f}'
                 })
                 epoch_pbar.update(1)
+                save_checkpoint()
+
+            if i % eval_interval == 0:
+                val_loss = validate_loss(ddp_model, val_loader, device=device)
+                # Save validation loss as the best if it is the best
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    no_improve = 0
+                    # Only save checkpoint on rank 0
+                    if dist.get_rank() == 0:
+                        torch.save(ddp_model.module.state_dict(), os.path.join(path, 'best_model.pth'))
+                else:
+                    no_improve += 1
+                    if no_improve >= patience:
+                        if rank == 0:
+                            main_pbar.set_description(f"Training (Early stopping at epoch {e+1})")
+                            main_pbar.close()
+                        stop_training = True
+                        break
+                
+                if dist.get_rank() == 0 and epoch_pbar is not None:
+                    epoch_pbar.set_postfix({
+                        'batch_loss': f'{loss.item():.4f}',
+                        'avg_loss': f'{total_loss/(i+1):.4f}',
+                        'val_loss': f'{val_loss.item():.4f}'
+                    })
+                    epoch_pbar.update(1)
+
         
         if dist.get_rank() == 0 and epoch_pbar is not None:
             epoch_pbar.close()
             
-        return total_loss / num_batches
+        return total_loss / num_batches, stop_training
 
     if CONTINUE_TRAINING:
         checkpoint = torch.load(os.path.join(path, 'checkpoint.pth'))
@@ -313,7 +355,9 @@ def main():
         val_sampler.set_epoch(e)
         
         # Train one epoch
-        epoch_loss = train_epoch(e)
+        epoch_loss, stop_training = train_epoch(e)
+        if stop_training:
+            break
         scheduler.step()
         
         # Update main progress bar and save checkpoint
@@ -325,47 +369,7 @@ def main():
                 'lr': f'{current_lr:.2e}'
             })
             main_pbar.update(1)
-            checkpoint_data = {
-                                'model': ddp_model.module.state_dict(),
-                                'optim': optimizer.state_dict(),
-                                'current_iter': e,
-                                'best_val_loss': best_val_loss,
-                                'train_loss': epoch_loss,
-                              }
-            if scheduler is not None:
-                checkpoint_data['scheduler'] = scheduler.state_dict()
-            if use_amp:
-                checkpoint_data['scaler'] = scaler.state_dict()
-            torch.save(checkpoint_data, os.path.join(path, 'checkpoint.pth'))
-
-        # Validation
-        if e % eval_interval == 0:
-            val_loss = validate_loss(ddp_model, val_loader, device=device)
-            val_losses.append(val_loss)
-            
-            # Update main progress bar with validation info
-            if rank == 0:
-                main_pbar.set_postfix({
-                    'epoch': f'{e+1}/{max_epoch}',
-                    'train_loss': f'{epoch_loss:.4f}',
-                    'val_loss': f'{val_loss:.4f}',
-                    'lr': f'{current_lr:.2e}'
-                })
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                no_improve = 0
-                # Only save checkpoint on rank 0
-                if dist.get_rank() == 0:
-                    torch.save(ddp_model.module.state_dict(), os.path.join(path, 'best_model.pth'))
-            else:
-                no_improve += 1
-                if no_improve >= patience:
-                    if rank == 0:
-                        main_pbar.set_description(f"Training (Early stopping at epoch {e+1})")
-                        main_pbar.close()
-                    break
-    
+        
     # Close main progress bar if training completed normally
     if rank == 0:
         main_pbar.close()
