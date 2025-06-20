@@ -186,21 +186,18 @@ for folder_name in os.listdir(models_path):
     if os.path.isdir(folder_path):
         # Read vocab_size from config.json in the folder
         config_path = os.path.join(folder_path, "config.json")
-        if not os.path.exists(config_path):
+        checkpoint_path = os.path.join(folder_path, "checkpoint.pth")
+        best_model_path = os.path.join(folder_path, 'best_model.pth')
+        if not os.path.exists(config_path) or not os.path.exists(checkpoint_path) or not os.path.exists(best_model_path):
             continue
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         folder_vocab_size = config.get("vocab_size")
         if folder_vocab_size == vocab_size:
             # Read best_val_loss from torch checkpoint
-            checkpoint_path = os.path.join(folder_path, "checkpoint.pth")
-            if not os.path.exists(config_path):
-                continue
             checkpoint = torch.load(checkpoint_path)
-            best_model_path = os.path.join(folder_path, 'best_model.pth')
-            if not os.path.exists(best_model_path):
-                continue
             folder_best_val_loss = checkpoint.get("best_val_loss")
+            print(f"Folder {folder_path} has best loss of {folder_best_val_loss}")
             if folder_best_val_loss < best_val_loss:
                 best_val_loss = folder_best_val_loss
                 best_model_path = folder_path
