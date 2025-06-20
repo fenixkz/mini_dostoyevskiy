@@ -324,7 +324,8 @@ def main():
             
             if i % eval_interval == 0 and i != 0:
                 val_loss = validate_loss(ddp_model, val_loader, device=device)
-                save_checkpoint()
+                if rank == 0:
+                    save_checkpoint()
                 # Save validation loss as the best if it is the best
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
