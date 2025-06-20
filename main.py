@@ -180,14 +180,14 @@ def main():
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
     context_length = 256
     batch_size = 32
-    n_embedding = 128
-    n_heads = 4
-    n_layers = 4
-    dropout = 0.1
+    n_embedding = 256
+    n_heads = 8
+    n_layers = 12
+    dropout = 0.2
     max_epoch = 20000
     eval_interval = 2500 # Not epochs, but iterations in training (within epoch)
     learning_rate = 3e-4
-    patience = 5
+    patience = 7
     no_improve = 0
     current_iter = 0
     use_amp = True if device == 'cuda' else False
