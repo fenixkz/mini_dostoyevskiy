@@ -179,7 +179,6 @@ def main():
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
     context_length = 512
     batch_size = 64
-    vocab_size = tokenizer.get_vocab_size()
     n_embedding = 240
     n_heads = 6
     n_layers = 6
@@ -193,33 +192,33 @@ def main():
     use_amp = True if device == 'cuda' else False
     grad_accum_steps = 4
     ##############################################
-
-    path = f"models/{time.strftime('%Y-%m-%d_%H-%M-%S')}"
-    os.makedirs(path, exist_ok=True)
-    # Save hyperparameters to a json file
-    # Create hyperparameters dictionary
-    hyperparameters = {
-        'device': device,
-        'context_length': context_length,
-        'batch_size': batch_size,
-        'vocab_size': vocab_size,
-        'n_embedding': n_embedding,
-        'n_heads': n_heads,
-        'n_layers': n_layers,
-        'dropout': dropout,
-        'max_epoch': max_epoch,
-        'eval_interval': eval_interval,
-        'learning_rate': learning_rate,
-        'patience': patience,
-        'no_improve': no_improve,
-        'current_iter': current_iter,
-        'use_amp': use_amp,
-        'grad_accum_steps': grad_accum_steps
-    }
+    if rank == 0:
+        path = f"models/{time.strftime('%Y-%m-%d_%H-%M-%S')}"
+        os.makedirs(path, exist_ok=True)
+        # Save hyperparameters to a json file
+        # Create hyperparameters dictionary
+        hyperparameters = {
+            'device': device,
+            'context_length': context_length,
+            'batch_size': batch_size,
+            'vocab_size': vocab_size,
+            'n_embedding': n_embedding,
+            'n_heads': n_heads,
+            'n_layers': n_layers,
+            'dropout': dropout,
+            'max_epoch': max_epoch,
+            'eval_interval': eval_interval,
+            'learning_rate': learning_rate,
+            'patience': patience,
+            'no_improve': no_improve,
+            'current_iter': current_iter,
+            'use_amp': use_amp,
+            'grad_accum_steps': grad_accum_steps
+        }
     
-    # Save hyperparameters to a json file
-    with open(os.path.join(path, 'config.json'), 'w') as f:
-        json.dump(hyperparameters, f, indent=2)
+        # Save hyperparameters to a json file
+        with open(os.path.join(path, 'config.json'), 'w') as f:
+            json.dump(hyperparameters, f, indent=2)
 
 
     ##################################### Dataloader initialization #############################################
