@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 from gpt_causal import GPT
 from data import get_dataset, TextDataset
@@ -262,8 +261,7 @@ def main():
                                                                     )
     
     enable_scaler = use_amp and dtype == 'float16'
-    scaler = GradScaler(enabled=enable_scaler)
-
+    scaler = torch.amp.GradScaler(device_type=device, enabled=enable_scaler)
     
     best_val_loss = 1e9
     val_loss = 0
