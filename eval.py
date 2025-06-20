@@ -200,10 +200,10 @@ for folder_name in os.listdir(models_path):
             print(f"Folder {folder_path} has best loss of {folder_best_val_loss}")
             if folder_best_val_loss < best_val_loss:
                 best_val_loss = folder_best_val_loss
-                best_model_path = folder_path
-print(f"The best model with vocab size {vocab_size} is in folder: {best_model_path} with validation loss: {best_val_loss:.4f}")
+                best_path = folder_path
+print(f"The best model with vocab size {vocab_size} is in folder: {best_path} with validation loss: {best_val_loss:.4f}")
 
-config = json.load(open(os.path.join(best_model_path, "config.json"), "r", encoding="utf-8"))
+config = json.load(open(os.path.join(best_path, "config.json"), "r", encoding="utf-8"))
 context_length = config.get("context_length")
 n_embedding = config.get("n_embedding")
 n_heads = config.get("n_heads")
