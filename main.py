@@ -171,8 +171,6 @@ def main():
     # Use np.memmap to avoid loading the whole file into RAM
     train_data = np.memmap(train_bin_path, dtype=np.uint16, mode='r')
     val_data = np.memmap(val_bin_path, dtype=np.uint16, mode='r')
-    train_data = encode(tokenizer, train_data)
-    val_data = encode(tokenizer, val_data)
     
     print(f'Training set contains: {len(train_data)} tokens')
     print(f'Validation set contains: {len(val_data)} tokens')
