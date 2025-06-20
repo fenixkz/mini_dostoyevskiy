@@ -284,7 +284,7 @@ def main():
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     no_improve = 0
-                    torch.save(model.module.state_dict(), os.path.join(path, 'best_model.pth'))
+                    torch.save(model.state_dict(), os.path.join(path, 'best_model.pth'))
                 else:
                     no_improve += 1
                     if no_improve >= patience:
