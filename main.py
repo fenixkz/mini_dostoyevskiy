@@ -18,6 +18,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import time
 import json
+import numpy as np
 
 # Set tokenizer parallelism to true
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -57,33 +58,39 @@ def write(model, x, max_words, context_length):
 
 def validate_loss(model, val_loader, device):
     model.eval()
-    total_val_loss = 0
-    num_val_batches = len(val_loader)
+    local_loss_sum = 0.0
+    local_samples_count = 0
     
-    # Create validation progress bar only for rank 0
     val_pbar = None
     if dist.get_rank() == 0:
-        val_pbar = tqdm(total=num_val_batches, desc="Validation", leave=False, position=1)
-    
+        val_pbar = tqdm(total=len(val_loader), desc="Validation", leave=False, position=1)
+
     with torch.no_grad():
-        for i, (x, y) in enumerate(val_loader):
+        for x, y in val_loader:
             x, y = x.to(device), y.to(device)
             _, loss = model(x, y)
-            total_val_loss += loss.item()
             
-            # Update validation progress bar
-            if dist.get_rank() == 0 and val_pbar is not None:
-                val_pbar.set_postfix({
-                    'val_loss': f'{loss.item():.4f}',
-                    'avg_val_loss': f'{total_val_loss/(i+1):.4f}'
-                })
+            # Multiply batch loss by batch size to get total loss for the batch
+            local_loss_sum += loss.item() * x.size(0)
+            local_samples_count += x.size(0)
+            
+            if dist.get_rank() == 0:
+                val_pbar.set_postfix({'val_loss_rank0': f'{loss.item():.4f}'})
                 val_pbar.update(1)
     
-    if dist.get_rank() == 0 and val_pbar is not None:
-        val_pbar.close()
+    if dist.get_rank() == 0: val_pbar.close()
+
+    if dist.is_initialized():
+        totals = torch.tensor([local_loss_sum, local_samples_count], dtype=torch.float64, device=device)
+        dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+        global_loss_sum = totals[0].item()
+        global_samples_count = totals[1].item()
+        avg_loss = global_loss_sum / global_samples_count
+    else:
+        avg_loss = local_loss_sum / local_samples_count
         
     model.train()
-    return total_val_loss / num_val_batches
+    return avg_loss
 
 def train_tokenizer(train_data, vocab_size):
     cleaned_book_filepath = 'data/books_for_tokenizer.txt'
@@ -130,21 +137,40 @@ def main():
     setup_ddp()
 
     # Get the local rank for device placement
+    rank = dist.get_rank()
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    vocab_size = 15000
-    train_data, val_data = get_dataset()
-    if dist.get_rank() == 0:
-        # This code will only be run by the main process
-        if not os.path.exists(f'data/tokenizer/tokenizer_{vocab_size}.json'):
-            # Ensure the data directory exists before any process needs it
-            os.makedirs('data/tokenizer', exist_ok=True)
-            train_tokenizer(train_data, vocab_size)
+    device = f'cuda:{local_rank}'
 
-    # All processes wait here until rank 0 has finished preparing the data
+    # --- DATA PREPARATION (ONLY ON RANK 0) ---
+    vocab_size = 15000
+    train_bin_path = 'data/train.bin'
+    val_bin_path = 'data/val.bin'
+    tokenizer_path = f'data/tokenizer/tokenizer_{vocab_size}.json'
+    if rank == 0:
+        print("Rank 0: Preparing data...")
+        train_data_raw, val_data_raw = get_dataset()
+
+        if not os.path.exists(tokenizer_path):
+            train_tokenizer(train_data_raw, vocab_size)
+
+        tokenizer = Tokenizer.from_file(tokenizer_path)
+
+        train_ids = encode(tokenizer, train_data_raw)
+        val_ids = encode(tokenizer, val_data_raw)
+
+        # Save to binary files
+        np.array(train_ids, dtype=np.uint16).tofile(train_bin_path)
+        np.array(val_ids, dtype=np.uint16).tofile(val_bin_path)
+        print("Rank 0: Data preparation complete.")
+
+    # All processes wait here until Rank 0 is done saving the files.
     dist.barrier()
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    # Now, all processes can safely load the tokenizer file
-    tokenizer = Tokenizer.from_file(f'data/tokenizer/tokenizer_{vocab_size}.json')
+
+    # --- DATA LOADING (ALL PROCESSES) ---
+    print(f"Rank {rank}: Loading data using memory mapping...")
+    # Use np.memmap to avoid loading the whole file into RAM
+    train_data = np.memmap(train_bin_path, dtype=np.uint16, mode='r')
+    val_data = np.memmap(val_bin_path, dtype=np.uint16, mode='r')
     train_data = encode(tokenizer, train_data)
     val_data = encode(tokenizer, val_data)
     
@@ -157,12 +183,11 @@ def main():
     batch_size = 64
     vocab_size = tokenizer.get_vocab_size()
     n_embedding = 256
-    n_heads = 8
-    n_layers = 8
-    dropout = 0.25
+    n_heads = 6
+    n_layers = 6
+    dropout = 0.4
     max_epoch = 20000
     eval_interval = 2500 # Not epochs, but iterations in training (within epoch)
-    eval_iters = 1
     learning_rate = 3e-4
     patience = 5
     no_improve = 0
@@ -186,7 +211,6 @@ def main():
         'dropout': dropout,
         'max_epoch': max_epoch,
         'eval_interval': eval_interval,
-        'eval_iters': eval_iters,
         'learning_rate': learning_rate,
         'patience': patience,
         'no_improve': no_improve,
@@ -238,10 +262,16 @@ def main():
         scaler = GradScaler()
     
     best_val_loss = 1e9
-    val_loss = 1e9
+    val_loss = 0
     epoch_loss = 1e9
     model.to(device)
     ddp_model = DDP(model, device_ids=[local_rank])
+
+    rank = dist.get_rank()
+
+    # Create the main training loop with improved progress tracking
+    if rank == 0:
+        main_pbar = tqdm(total=max_epoch-current_iter, desc="Overall Training Progress", position=0)
 
     def save_checkpoint():
         checkpoint_data = {
@@ -264,7 +294,7 @@ def main():
         num_batches = len(train_loader)
         stop_training = False
         # Create epoch progress bar only for rank 0
-        if dist.get_rank() == 0 and epoch_pbar is None:
+        if rank == 0 and epoch_pbar is None:
             epoch_pbar = tqdm(total=num_batches, desc=f"Epoch {e+1}", leave=False, position=1)
         
         for i, (x, y) in enumerate(train_loader):
@@ -276,7 +306,7 @@ def main():
                 _, loss = ddp_model(x, y)
             
             loss = loss / grad_accum_steps
-            total_loss += loss.item()
+            total_loss += loss.item() * grad_accum_steps  # Store unscaled loss for logging
             
             if use_amp: # Call backward, but do not step the optimizer
                 scaler.scale(loss).backward()
@@ -303,7 +333,7 @@ def main():
                     best_val_loss = val_loss
                     no_improve = 0
                     # Only save checkpoint on rank 0
-                    if dist.get_rank() == 0:
+                    if rank == 0:
                         torch.save(ddp_model.module.state_dict(), os.path.join(path, 'best_model.pth'))
                 else:
                     no_improve += 1
@@ -312,18 +342,19 @@ def main():
                             main_pbar.set_description(f"Training (Early stopping at epoch {e+1})")
                             main_pbar.close()
                         stop_training = True
+                        print(f"Stopping training at epoch {e} with best validation loss: {best_val_loss} and current validation loss {val_loss}")
                         break
             
             # Update epoch progress bar
-            if dist.get_rank() == 0 and epoch_pbar is not None:
+            if rank == 0 and epoch_pbar is not None:
                 epoch_pbar.set_postfix({
-                        'batch_loss': f'{loss.item():.4f}',
+                        'batch_loss': f'{(loss.item() * grad_accum_steps):.4f}',  # Show unscaled loss
                         'avg_loss': f'{total_loss/(i+1):.4f}',
                         'val_loss': f'{val_loss:.4f}'
                     })
                 epoch_pbar.update(1)
                 
-        if dist.get_rank() == 0 and epoch_pbar is not None:
+        if rank == 0 and epoch_pbar is not None:
             epoch_pbar.close()
             
         return total_loss / num_batches, stop_training
@@ -338,11 +369,6 @@ def main():
         if use_amp and 'scaler' in checkpoint: # Load scaler state
             scaler.load_state_dict(checkpoint['scaler'])
 
-    rank = dist.get_rank()
-
-    # Create the main training loop with improved progress tracking
-    if rank == 0:
-        main_pbar = tqdm(total=max_epoch-current_iter, desc="Overall Training Progress", position=0)
     
     for e in range(current_iter, max_epoch):
         # Set epoch for distributed samplers
@@ -352,9 +378,7 @@ def main():
         # Train one epoch
         epoch_loss, stop_training = train_epoch(e)
         if stop_training:
-            break
-        scheduler.step()
-        
+            break        
         # Update main progress bar and save checkpoint
         if rank == 0:
             current_lr = optimizer.param_groups[0]['lr']
