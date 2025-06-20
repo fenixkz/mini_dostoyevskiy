@@ -220,7 +220,7 @@ model = GPT(vocab_size=vocab_size, context_length = context_length,
             num_layers = n_layers, dropout=dropout).to(device)
 
 # print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
-model.load_state_dict(torch.load(os.path.join(best_model_path, "best_model.pth")))
+model.load_state_dict(torch.load(os.path.join(best_path, "best_model.pth")))
 
 # Generate text
 max_words = 200
