@@ -27,7 +27,7 @@ class CausalAttention(nn.Module):
     def __init__(self, embedding_dim, context_length, n_heads, dropout):
         super().__init__()
         self.n_heads = n_heads
-        self.dropout = dropout
+        self.dropout_p = dropout
         # K,Q,V matrices in one triple size one
         self.c_attn = nn.Linear(embedding_dim, 3*embedding_dim, bias=False)
         # Output projection
@@ -50,7 +50,7 @@ class CausalAttention(nn.Module):
 
         # Causal self-attention: (B, nh, T, hs) x (B, nh, ns, T) -> (B, nh, T, T)
         if self.flash:
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout_p if self.training else 0, is_causal=True)
         else:
             # Manual attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
