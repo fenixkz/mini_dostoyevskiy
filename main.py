@@ -323,7 +323,6 @@ def main():
                     })
                 epoch_pbar.update(1)
                 
-
         if dist.get_rank() == 0 and epoch_pbar is not None:
             epoch_pbar.close()
             

@@ -186,6 +186,8 @@ for folder_name in os.listdir(models_path):
     if os.path.isdir(folder_path):
         # Read vocab_size from config.json in the folder
         config_path = os.path.join(folder_path, "config.json")
+        if not os.path.exists(config_path):
+            continue
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         folder_vocab_size = config.get("vocab_size")
