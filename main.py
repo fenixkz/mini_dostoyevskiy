@@ -180,7 +180,7 @@ def main():
     context_length = 512
     batch_size = 64
     vocab_size = tokenizer.get_vocab_size()
-    n_embedding = 256
+    n_embedding = 240
     n_heads = 6
     n_layers = 6
     dropout = 0.4
