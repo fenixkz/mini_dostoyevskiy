@@ -250,7 +250,7 @@ def main():
                 embedding_dim = n_embedding, num_heads = n_heads, 
                 num_layers = n_layers, dropout=dropout).to(device)
     print("Compiling the model... (this may take a moment)")
-    model = torch.compile(model)
+    model = torch.compile(model, mode="max-autotune")
     print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
     
     optimizer = model.configure_optimizers(weight_decay=0.01, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
