@@ -194,7 +194,12 @@ for folder_name in os.listdir(models_path):
         if folder_vocab_size == vocab_size:
             # Read best_val_loss from torch checkpoint
             checkpoint_path = os.path.join(folder_path, "checkpoint.pth")
+            if not os.path.exists(config_path):
+                continue
             checkpoint = torch.load(checkpoint_path)
+            best_model_path = os.path.join(folder_path, 'best_model.pth')
+            if not os.path.exists(best_model_path):
+                continue
             folder_best_val_loss = checkpoint.get("best_val_loss")
             if folder_best_val_loss < best_val_loss:
                 best_val_loss = folder_best_val_loss
