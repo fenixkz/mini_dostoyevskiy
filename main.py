@@ -4,12 +4,13 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import GradScaler
 from tqdm import tqdm
-from gpt import GPT
+from gpt_causal import GPT
 from data import get_dataset, TextDataset
 import cProfile
 import pstats
 import io
 import os
+from contextlib import nullcontext
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
 from transformers import get_cosine_schedule_with_warmup
 from torch.utils.data import Dataset, DataLoader
@@ -182,7 +183,7 @@ def main():
     n_embedding = 240
     n_heads = 6
     n_layers = 6
-    dropout = 0.4
+    dropout = 0.1
     max_epoch = 20000
     eval_interval = 2500 # Not epochs, but iterations in training (within epoch)
     learning_rate = 3e-4
@@ -191,6 +192,9 @@ def main():
     current_iter = 0
     use_amp = True if device == 'cuda' else False
     grad_accum_steps = 4
+    dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
+    pt_dtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
+    ctx = nullcontext() if device == 'cpu' else torch.amp.autocast(device_type=device, dtype=pt_dtype) # Context for autocast or none if cpu
     ##############################################
     if rank == 0:
         path = f"models/{time.strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -245,18 +249,21 @@ def main():
     model = GPT(vocab_size=vocab_size, context_length = context_length, 
                 embedding_dim = n_embedding, num_heads = n_heads, 
                 num_layers = n_layers, dropout=dropout).to(device)
-    
+    print("Compiling the model... (this may take a moment)")
+    model = torch.compile(model)
     print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+    optimizer = model.configure_optimizers(weight_decay=0.01, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                                                                         optimizer,
                                                                         T_0=5000, # Period of lr cycling, per single iteration  
                                                                         T_mult=1,                  
                                                                         eta_min=3e-6               
                                                                     )
-    if use_amp:
-        scaler = GradScaler()
+    
+    enable_scaler = use_amp and dtype == 'float16'
+    scaler = GradScaler(enabled=enable_scaler)
+
     
     best_val_loss = 1e9
     val_loss = 0
@@ -299,26 +306,25 @@ def main():
             x, y = x.to(device), y.to(device)
             
             # Forward pass with autocasting
-            with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
+            with ctx:
                 _, loss = ddp_model(x, y)
             
             loss = loss / grad_accum_steps
             total_loss += loss.item() * grad_accum_steps  # Store unscaled loss for logging
             
-            if use_amp: # Call backward, but do not step the optimizer
-                scaler.scale(loss).backward()
-            else:
-                loss.backward()
+            # scaler.scale() is a no-op if scaler is disabled
+            scaler.scale(loss).backward()
+            
 
             if (i+1) % grad_accum_steps == 0: # Accumulate gradients over multiple iterations and step the optimizer
-                if use_amp:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
-                    optimizer.step()
+                # scaler.unscale_ is a no-op if scaler is disabled
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
+                # scaler.step is a no-op if scaler is disabled
+                scaler.step(optimizer)
+                # scaler.update is a no-op if scaler is disabled
+                scaler.update()
+                
                 optimizer.zero_grad(set_to_none=True)
                 scheduler.step() # Update learning rate each iteration
             
