@@ -395,6 +395,5 @@ def main():
     # Cleanup DDP
     dist.destroy_process_group()
 
-
 if __name__ == '__main__':
     main()
