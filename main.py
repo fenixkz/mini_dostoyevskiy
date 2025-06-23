@@ -195,7 +195,6 @@ def main():
     pt_dtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
     ctx = nullcontext() if device == 'cpu' else torch.amp.autocast(device_type=device, dtype=torch.float16) # Context for autocast or none if cpu
     ##############################################
-    print(pt_dtype)
     if rank == 0:
         path = f"models/{time.strftime('%Y-%m-%d_%H-%M-%S')}"
         os.makedirs(path, exist_ok=True)
@@ -250,7 +249,7 @@ def main():
                 embedding_dim = n_embedding, num_heads = n_heads, 
                 num_layers = n_layers, dropout=dropout).to(device)
     print("Compiling the model... (this may take a moment)")
-    model = torch.compile(model, mode="max-autotune")
+    model = torch.compile(model)
     print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
     
     optimizer = model.configure_optimizers(weight_decay=0.01, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
