@@ -193,8 +193,9 @@ def main():
     grad_accum_steps = 4
     dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
     pt_dtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-    ctx = nullcontext() if device == 'cpu' else torch.amp.autocast(device_type=device, dtype=pt_dtype) # Context for autocast or none if cpu
+    ctx = nullcontext() if device == 'cpu' else torch.amp.autocast(device_type=device, dtype=torch.float16) # Context for autocast or none if cpu
     ##############################################
+    print(pt_dtype)
     if rank == 0:
         path = f"models/{time.strftime('%Y-%m-%d_%H-%M-%S')}"
         os.makedirs(path, exist_ok=True)
