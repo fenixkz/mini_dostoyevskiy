@@ -180,7 +180,7 @@ def main():
     context_length = 256
     batch_size = 32
     n_embedding = 256
-    n_heads = 4
+    n_heads = 8
     n_layers = 6
     dropout = 0.2
     max_epoch = 20000
