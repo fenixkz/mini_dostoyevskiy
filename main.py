@@ -261,7 +261,7 @@ def main():
                                                                     )
     
     enable_scaler = use_amp and dtype == 'float16'
-    scaler = torch.amp.GradScaler('cuda', enabled=enable_scaler)
+    scaler = torch.amp.GradScaler(device, enabled=enable_scaler)
     
     best_val_loss = 1e9
     val_loss = 0
