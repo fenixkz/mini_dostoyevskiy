@@ -76,9 +76,37 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class DropPath(nn.Module):
+    """
+    Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
+    
+    This is a regularization technique that randomly drops residual connections during training.
+    """
+    def __init__(self, drop_prob: float = 0.):
+        super(DropPath, self).__init__()
+        # Probability of dropping a sample from the batch
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0. or not self.training:
+            return x
+        
+        # Calculate keep probability
+        keep_prob = 1 - self.drop_prob
+        
+        # Create a random tensor for dropping entire samples in the batch
+        # Shape is (batch_size, 1, 1) to broadcast across all other dimensions
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor.floor_()  # A clever trick to create a binary mask 
+        
+        # Scale the output by keep_prob to maintain expected value (inverted dropout)
+        output = x.div(keep_prob) * random_tensor
+        return output
+
 class Block(nn.Module):
 
-    def __init__(self, embedding_dim, context_length, num_heads, dropout):
+    def __init__(self, embedding_dim, context_length, num_heads, dropout, drop_path_rate):
         assert embedding_dim % num_heads == 0, "Embedding dim must be divisible by num_heads"
         # embedding_dim: embedding dimension, num_heads: the number of heads we'd like
         super().__init__()
@@ -87,24 +115,23 @@ class Block(nn.Module):
         self.ffwd = FeedForward(embedding_dim, dropout)
         self.ln1 = RMSNorm(embedding_dim)
         self.ln2 = RMSNorm(embedding_dim)
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
 
     def forward(self, x):
-        x_norm1 = self.ln1(x)
-        x = x + self.sa(x_norm1)
-        x_norm2 = self.ln2(x)
-        x = x + self.ffwd(x_norm2)
+        x = x + self.drop_path(self.sa(self.ln1(x)))
+        x = x + self.drop_path(self.ffwd(self.ln2(x)))
         return x
 
 class GPT(nn.Module):
 
-    def __init__(self, vocab_size, context_length, embedding_dim, num_heads, num_layers, dropout):
+    def __init__(self, vocab_size, context_length, embedding_dim, num_heads, num_layers, dropout, drop_path_rate):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.context_length = context_length
         self.embedding_layer = nn.Embedding(vocab_size, embedding_dim)
         self.position_embedding = nn.Embedding(context_length, embedding_dim)
         
-        self.blocks = nn.Sequential(*[Block(embedding_dim, context_length, num_heads, dropout) for _ in range(num_layers)])
+        self.blocks = nn.Sequential(*[Block(embedding_dim, context_length, num_heads, dropout, drop_path_rate) for _ in range(num_layers)])
         self.ln_f = RMSNorm(embedding_dim) # final layer norm
         self.lm_head = nn.Linear(embedding_dim, vocab_size, bias=False)
         self.dropout = nn.Dropout(dropout)
