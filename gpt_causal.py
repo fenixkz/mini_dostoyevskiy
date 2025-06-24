@@ -130,8 +130,17 @@ class GPT(nn.Module):
         self.context_length = context_length
         self.embedding_layer = nn.Embedding(vocab_size, embedding_dim)
         self.position_embedding = nn.Embedding(context_length, embedding_dim)
-        
-        self.blocks = nn.Sequential(*[Block(embedding_dim, context_length, num_heads, dropout, drop_path_rate) for _ in range(num_layers)])
+        # A list of drop path rates for each block, increasing from 0 to drop_path_rate
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, num_layers)]
+        self.blocks = nn.ModuleList() 
+        for i in range(num_layers):
+            self.blocks.append(Block(
+                embedding_dim, 
+                context_length, 
+                num_heads, 
+                dropout, 
+                dpr[i] # Pass the specific drop_path_rate for this block
+            ))
         self.ln_f = RMSNorm(embedding_dim) # final layer norm
         self.lm_head = nn.Linear(embedding_dim, vocab_size, bias=False)
         self.dropout = nn.Dropout(dropout)
