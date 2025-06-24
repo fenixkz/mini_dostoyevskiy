@@ -12,7 +12,6 @@ import os
 from contextlib import nullcontext
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
 from transformers import get_cosine_schedule_with_warmup
-from torch.utils.data import Dataset, DataLoader
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler

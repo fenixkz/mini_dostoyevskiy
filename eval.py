@@ -1,14 +1,10 @@
+import os
+import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import os
-import time
-import torch
-import torch.nn.functional as F
-from gpt import GPT
-from data import get_dataset
+from gpt_causal import GPT
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
-import json
 
 def encode(tokenizer: ByteLevelBPETokenizer, text):
     return tokenizer.encode(text).ids
