@@ -216,7 +216,22 @@ model = GPT(vocab_size=vocab_size, context_length = context_length,
             num_layers = n_layers, dropout=dropout).to(device)
 
 # print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
-model.load_state_dict(torch.load(os.path.join(best_path, "best_model.pth")))
+# Load the state dict and handle the _orig_mod prefix if present
+state_dict = torch.load(os.path.join(best_path, "best_model.pth"))
+
+# Check if the state dict has _orig_mod prefix (from torch.compile)
+if any(key.startswith('_orig_mod.') for key in state_dict.keys()):
+    # Remove the _orig_mod prefix from all keys
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith('_orig_mod.'):
+            new_key = key[len('_orig_mod.'):]  # Remove the prefix
+            new_state_dict[new_key] = value
+        else:
+            new_state_dict[key] = value
+    state_dict = new_state_dict
+
+model.load_state_dict(state_dict)
 
 # Generate text
 max_words = 200
