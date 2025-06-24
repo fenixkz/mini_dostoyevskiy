@@ -181,7 +181,8 @@ def main():
     n_embedding = 256
     n_heads = 16
     n_layers = 16
-    dropout = 0.6
+    dropout = 0.3
+    drop_path_rate = 0.1
     max_epoch = 20000
     eval_interval = 2500 # Not epochs, but iterations in training (within epoch)
     learning_rate = 3e-4
@@ -208,6 +209,7 @@ def main():
             'n_heads': n_heads,
             'n_layers': n_layers,
             'dropout': dropout,
+            'drop_path_rate': drop_path_rate,
             'max_epoch': max_epoch,
             'eval_interval': eval_interval,
             'learning_rate': learning_rate,
@@ -246,7 +248,7 @@ def main():
 
     model = GPT(vocab_size=vocab_size, context_length = context_length, 
                 embedding_dim = n_embedding, num_heads = n_heads, 
-                num_layers = n_layers, dropout=dropout).to(device)
+                num_layers = n_layers, dropout=dropout, drop_path_rate=drop_path_rate).to(device)
     print("Compiling the model... (this may take a moment)")
     model = torch.compile(model)
     print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
