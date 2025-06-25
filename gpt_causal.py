@@ -5,6 +5,14 @@ import math
 from typing import Tuple
 import inspect
 
+class SwiGLU(nn.Module):
+    '''
+    An improvement over default activation functions (divine benevolence) from https://arxiv.org/pdf/2002.05202v1
+    '''
+    def forward(self, x):
+        x, gate = x.chunk(2, dim=-1)
+        return F.silu(gate) * x
+
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -68,7 +76,7 @@ class FeedForward(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(embedding_dim, 4 * embedding_dim, bias = False),
-            nn.GELU(),
+            SwiGLU(),
             nn.Linear(4 * embedding_dim, embedding_dim, bias = False),
             nn.Dropout(dropout),
         )

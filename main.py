@@ -176,8 +176,8 @@ def main():
 
     ############ Hyperparameters ################
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
-    context_length = 1028
-    batch_size = 16
+    context_length = 512
+    batch_size = 64
     n_embedding = 384
     n_heads = 3
     n_layers = 3
