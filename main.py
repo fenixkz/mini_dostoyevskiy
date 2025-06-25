@@ -176,12 +176,12 @@ def main():
 
     ############ Hyperparameters ################
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
-    context_length = 256
-    batch_size = 32
-    n_embedding = 256
-    n_heads = 16
-    n_layers = 16
-    dropout = 0.3
+    context_length = 1028
+    batch_size = 16
+    n_embedding = 512
+    n_heads = 4
+    n_layers = 4
+    dropout = 0.25
     drop_path_rate = 0.1
     max_epoch = 20000
     eval_interval = 2500 # Not epochs, but iterations in training (within epoch)
