@@ -178,15 +178,16 @@ def main():
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
     context_length = 1028
     batch_size = 16
-    n_embedding = 512
-    n_heads = 4
-    n_layers = 4
-    dropout = 0.25
-    drop_path_rate = 0.1
+    n_embedding = 384
+    n_heads = 3
+    n_layers = 3
+    dropout = 0.3
+    drop_path_rate = 0.2
+    weight_decay = 0.1
     max_epoch = 20000
     eval_interval = 2500 # Not epochs, but iterations in training (within epoch)
     learning_rate = 3e-4
-    patience = 7
+    patience = 5
     no_improve = 0
     current_iter = 0
     use_amp = True if device == 'cuda' else False
@@ -210,6 +211,7 @@ def main():
             'n_layers': n_layers,
             'dropout': dropout,
             'drop_path_rate': drop_path_rate,
+            'weight_decay': weight_decay,
             'max_epoch': max_epoch,
             'eval_interval': eval_interval,
             'learning_rate': learning_rate,
@@ -253,7 +255,7 @@ def main():
     model = torch.compile(model)
     print(sum(p.numel() for p in model.parameters())/1e6, 'M parameters')
     
-    optimizer = model.configure_optimizers(weight_decay=0.01, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
+    optimizer = model.configure_optimizers(weight_decay=weight_decay, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                                                                         optimizer,
                                                                         T_0=5000, # Period of lr cycling, per single iteration  
