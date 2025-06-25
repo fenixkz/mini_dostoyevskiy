@@ -72,17 +72,33 @@ class CausalAttention(nn.Module):
         return y
 
 class FeedForward(nn.Module):
-    def __init__(self, embedding_dim, dropout):
+    def __init__(self, embedding_dim: int, dropout: float):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(embedding_dim, 4 * embedding_dim, bias = False),
-            SwiGLU(),
-            nn.Linear(4 * embedding_dim, embedding_dim, bias = False),
-            nn.Dropout(dropout),
-        )
+        # We can't use nn.Sequential anymore because the dimensions change mid-way.
+        # Calculate a hidden dimension, often a multiple of 256 for efficiency.
+        # This formula is from the Llama paper.
+        hidden_dim = 4 * embedding_dim
+        hidden_dim = int(2 * hidden_dim / 3)
+        # For SwiGLU, it's common to make the hidden_dim a multiple of a round number.
+        hidden_dim = 256 * ((hidden_dim + 256 - 1) // 256)
 
-    def forward(self, x):
-        return self.net(x)
+        # The first linear layer projects to 2 * hidden_dim because SwiGLU will chunk it in half.
+        self.linear_up = nn.Linear(embedding_dim, 2 * hidden_dim, bias=False)
+        
+        # Your SwiGLU activation module is correct and doesn't need to be changed.
+        self.activation = SwiGLU()
+    
+        # The second linear layer projects from the output of SwiGLU (which is hidden_dim)
+        # back down to the embedding dimension.
+        self.linear_down = nn.Linear(hidden_dim, embedding_dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.linear_up(x)
+        x = self.activation(x)
+        x = self.linear_down(x)
+        x = self.dropout(x)
+        return x
 
 class DropPath(nn.Module):
     """
