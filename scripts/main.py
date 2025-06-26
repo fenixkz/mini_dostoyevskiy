@@ -92,7 +92,7 @@ def main():
     drop_path_rate = 0.1
     weight_decay = 0.01
     max_epoch = 20000
-    eval_interval = 2500 # Not epochs, but iterations in training (within epoch)
+    eval_interval = 20000 # Not epochs, but iterations in training (within epoch)
     learning_rate = 3e-4
     patience = 5
     no_improve = 0
