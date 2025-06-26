@@ -12,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
 from gpt import GPT
-from data import get_dataset, TextDataset
+from data import TextDataset
 from contextlib import nullcontext
 
 # Set tokenizer parallelism to true
