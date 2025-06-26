@@ -10,6 +10,6 @@ echo "Launching DDP training on $NUM_GPUS GPUs..."
 torchrun \
     --standalone \
     --nproc_per_node=$NUM_GPUS \
-    main.py
+    scripts/main.py
 
 echo "Training completed!"
