@@ -35,10 +35,10 @@ class RuTokenizer:
         byte_level_tokenizer.save(self.save_path)
         print(f"Токенизатор сохранен в: {self.save_path}")
 
-    def encode(tokenizer: ByteLevelBPETokenizer, text):
+    def encode(self, tokenizer: ByteLevelBPETokenizer, text):
         return tokenizer.encode(text).ids
 
-    def decode(tokenizer: ByteLevelBPETokenizer, ids):
+    def decode(self, tokenizer: ByteLevelBPETokenizer, ids):
         return tokenizer.decode(ids)
 
     def tokenize_and_save_in_batches(self, tokenizer: Tokenizer, input_txt_path: str, output_bin_path: str):
