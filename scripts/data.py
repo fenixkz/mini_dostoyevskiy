@@ -3,6 +3,8 @@ import re
 import html
 from torch.utils.data import Dataset
 
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 def clean_text(text):
     """
     Очищает текст, удаляя HTML-экранирование, номера страниц, глав, сноски и спецсимволы.
@@ -108,16 +110,16 @@ def clean_text(text):
 
 def get_dataset():
     books = []
-    for filename in os.listdir('../data/books/train'):
+    for filename in os.listdir(f'{PROJECT_DIR}/data/books/train'):
         if filename.endswith('.txt'):
-            with open(f'../data/books/train/{filename}', 'r') as file:
+            with open(f'{PROJECT_DIR}/data/books/train/{filename}', 'r') as file:
                 books.append(file.read())
     data = "\n\n".join(books)
     data = clean_text(data)
     val_books = []
-    for filename in os.listdir('../data/books/val'):
+    for filename in os.listdir(f'{PROJECT_DIR}/data/books/val'):
         if filename.endswith('.txt'):
-            with open(f'../data/books/val/{filename}', 'r') as file:
+            with open(f'{PROJECT_DIR}/data/books/val/{filename}', 'r') as file:
                 val_books.append(file.read())
     val_data = "\n\n".join(val_books)
     val_data = clean_text(val_data)
