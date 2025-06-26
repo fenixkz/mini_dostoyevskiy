@@ -11,7 +11,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
-from gpt_causal import GPT
+from gpt import GPT
 from data import get_dataset, TextDataset
 from contextlib import nullcontext
 
@@ -36,22 +36,6 @@ def encode(tokenizer: ByteLevelBPETokenizer, text):
 
 def decode(tokenizer: ByteLevelBPETokenizer, ids):
     return tokenizer.decode(ids)
-
-def write(model, x, max_words, context_length):
-    model.eval()
-    with torch.no_grad():
-        for _ in range(max_words):
-            if x.size(1) > context_length:
-                logits, loss = model.forward(x[:, -context_length:]) # (B, V)
-            else:
-                logits, loss = model.forward(x) # (B, V)
-            logits = logits[:,-1, :]
-            probs = F.softmax(logits, dim=-1)
-            next_word = torch.multinomial(probs, num_samples = 1)
-            # Concatenate the next word to the input sequence
-            x = torch.cat((x, next_word), dim=1)  # (B, T+1)
-    model.train()
-    return x
 
 def validate_loss(model, val_loader, device):
     model.eval()
@@ -89,18 +73,12 @@ def validate_loss(model, val_loader, device):
     model.train()
     return avg_loss
 
-def train_tokenizer(train_data):
-    # --- Шаг 1: Подготовка .txt файла для обучения ---
-
-    cleaned_book_filepath = f'{PROJECT_DIR}/data/tokenizer/books_for_tokenizer.txt'
+def train_tokenizer(train_data_path: str):
 
     if not os.path.exists(f'{PROJECT_DIR}/data'):
         os.makedirs(f'{PROJECT_DIR}/data')
-
-    with open(cleaned_book_filepath, 'w', encoding='utf-8') as f:
-        f.write(train_data) 
-
-    # --- Шаг 2: Инициализация и обучение ByteLevelBPETokenizer ---
+    
+    # --- Шаг 1: Инициализация и обучение ByteLevelBPETokenizer ---
 
     # Инициализируем ByteLevelBPETokenizer
     # add_prefix_space=True - важный параметр, помогает в реконструкции предложений
@@ -111,9 +89,9 @@ def train_tokenizer(train_data):
     # vocab_size - желаемый размер словаря
     # min_frequency - минимальная частота встречаемости
     # special_tokens - список специальных токенов
-    print(f"Начинаем обучение ByteLevelBPETokenizer на файле: {cleaned_book_filepath}")
+    print(f"Начинаем обучение ByteLevelBPETokenizer")
     byte_level_tokenizer.train(
-        files=[cleaned_book_filepath],
+        files=[train_data_path],
         vocab_size=VOCAB_SIZE, 
         min_frequency=3,
         special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"],
@@ -132,6 +110,35 @@ def train_tokenizer(train_data):
 
     return byte_level_tokenizer
 
+def tokenize_and_save_in_batches(tokenizer: Tokenizer, input_txt_path: str, output_bin_path: str):
+    """
+    Reads a large text file line-by-line, tokenizes it, and saves the token IDs
+    to a binary file in a memory-efficient way.
+    """
+    print(f"Tokenizing {input_txt_path} and saving to {output_bin_path}...")
+    
+    # Use a specific dtype to save space. uint16 is good for vocabs up to 65,535.
+    DTYPE = np.uint16 
+
+    # Count total lines for a nice progress bar
+    with open(input_txt_path, 'r', encoding='utf-8') as f:
+        num_lines = sum(1 for _ in f)
+
+    # Use np.memmap in write mode ('w+') to create and grow the file on disk
+    # We start with shape (0,) and will append to it.
+    token_array = np.memmap(output_bin_path, dtype=DTYPE, mode='w+', shape=(0,))
+
+    with open(input_txt_path, 'r', encoding='utf-8') as f:
+        for line in tqdm(f, total=num_lines, desc=f"Processing {os.path.basename(input_txt_path)}"):
+            if line.strip():
+                # Tokenize one line at a time
+                token_ids = encode(tokenizer, line)
+                # Append the new tokens to the memmap file on disk.
+                # This is memory-efficient.
+                token_array = np.append(token_array, token_ids)
+    
+    print("Tokenization and saving complete.")
+
 def main():
     setup_ddp()
     start_time = time.time()
@@ -141,37 +148,30 @@ def main():
     device = f'cuda:{local_rank}'
 
     # --- DATA PREPARATION (ONLY ON RANK 0) ---
-    train_bin_path = f'{PROJECT_DIR}/data/books/train.bin'
-    val_bin_path = f'{PROJECT_DIR}/data/books/val.bin'
+    train_bin_path = f'{PROJECT_DIR}/data/wiki/train.bin'
+    val_bin_path = f'{PROJECT_DIR}/data/wiki/val.bin'
     tokenizer_path = f'{PROJECT_DIR}/data/tokenizer/tokenizer_{VOCAB_SIZE}.json'
+    train_data_path = f'{PROJECT_DIR}/data/wiki/train.txt'
+    val_data_path = f'{PROJECT_DIR}/data/wiki/val.txt'
     if rank == 0:
         print("Rank 0: Preparing data...")
-        train_data_raw, val_data_raw = get_dataset()
 
         if not os.path.exists(tokenizer_path):
-            train_tokenizer(train_data_raw)
+            train_tokenizer(train_data_path)
 
         tokenizer = Tokenizer.from_file(tokenizer_path)
 
-        train_ids = encode(tokenizer, train_data_raw)
-        val_ids = encode(tokenizer, val_data_raw)
+        if not os.path.exists(train_bin_path):
+            tokenize_and_save_in_batches(tokenizer, train_data_path, train_bin_path)
+        if not os.path.exists(val_bin_path):
+            tokenize_and_save_in_batches(tokenizer, val_data_path, val_bin_path)
 
         # Save to binary files
-        np.array(train_ids, dtype=np.uint16).tofile(train_bin_path)
-        np.array(val_ids, dtype=np.uint16).tofile(val_bin_path)
         print("Rank 0: Data preparation complete.")
 
     # All processes wait here until Rank 0 is done saving the files.
     dist.barrier()
 
-    # --- DATA LOADING (ALL PROCESSES) ---
-    print(f"Rank {rank}: Loading data using memory mapping...")
-    # Use np.memmap to avoid loading the whole file into RAM
-    train_data = np.memmap(train_bin_path, dtype=np.uint16, mode='r')
-    val_data = np.memmap(val_bin_path, dtype=np.uint16, mode='r')
-    
-    print(f'Training set contains: {len(train_data)} tokens')
-    print(f'Validation set contains: {len(val_data)} tokens')
 
     ############ Hyperparameters ################
     device = f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu'
@@ -229,12 +229,10 @@ def main():
 
 
     ##################################### Dataloader initialization #############################################
-    train_data = torch.tensor(train_data, dtype=torch.long)  # Keep on CPU
-    val_data = torch.tensor(val_data, dtype=torch.long)      # Keep on CPU
-    train_dataset = TextDataset(train_data, context_length)
+    train_dataset = TextDataset(train_bin_path, context_length)
     train_sampler = DistributedSampler(train_dataset)
 
-    val_dataset = TextDataset(val_data, context_length)
+    val_dataset = TextDataset(val_bin_path, context_length)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
     
     train_loader = DataLoader(
