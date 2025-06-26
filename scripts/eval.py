@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from gpt_causal import GPT
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
 
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 def encode(tokenizer: ByteLevelBPETokenizer, text):
     return tokenizer.encode(text).ids
 
@@ -172,11 +174,11 @@ def write(model, initial_token_ids, max_new_tokens, context_length,
 print("Hello! This is a mini-Dostoyevskiy GPT based model. Please to evaluate the model, write the vocabulary size: ")
 vocab_size = int(input())
 
-tokenizer = Tokenizer.from_file(f'data/tokenizer/tokenizer_{vocab_size}.json')
+tokenizer = Tokenizer.from_file(f'{PROJECT_DIR}/data/tokenizer/tokenizer_{vocab_size}.json')
 
 best_val_loss = float('inf')
 # Iterate over all folders in path models/
-models_path = 'models/'
+models_path = f'{PROJECT_DIR}/models'
 for folder_name in os.listdir(models_path):
     folder_path = os.path.join(models_path, folder_name)
     if os.path.isdir(folder_path):
