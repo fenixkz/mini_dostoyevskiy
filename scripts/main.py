@@ -128,10 +128,6 @@ def tokenize_and_save_in_batches(tokenizer: Tokenizer, input_txt_path: str, outp
         print(f"Error: Input file not found at {input_txt_path}")
         return
 
-    # Use np.memmap in write mode ('w+') to create and grow the file on disk
-    # We start with shape (0,) and will append to it.
-    token_array = np.memmap(output_bin_path, dtype=DTYPE, mode='w+', shape=(0,))
-
     # Open the output file in binary 'append' mode ('ab').
     # This will create the file if it doesn't exist.
     with open(output_bin_path, 'ab') as output_file:
