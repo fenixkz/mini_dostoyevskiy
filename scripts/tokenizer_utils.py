@@ -50,6 +50,7 @@ class RuTokenizer:
         
         # Use a specific dtype to save space. uint16 is good for vocabs up to 65,535.
         DTYPE = np.uint16 
+        BATCH_SIZE_LINES = 100_000
 
         # Count total lines for a nice progress bar
         try:
@@ -60,21 +61,37 @@ class RuTokenizer:
             return
 
         # Open the output file in binary 'append' mode ('ab').
-        # This will create the file if it doesn't exist.
         with open(output_bin_path, 'ab') as output_file:
             with open(input_txt_path, 'r', encoding='utf-8') as input_file:
-                for line in tqdm(input_file, total=num_lines, desc=f"Processing {os.path.basename(input_txt_path)}"):
-                    if line.strip():
-                        # Tokenize one line at a time
-                        token_ids = self.encode(tokenizer=tokenizer, text=line)
+                # Use tqdm to track progress by file size for better estimation
+                file_size = os.path.getsize(input_txt_path)
+                with tqdm(total=file_size, unit='B', unit_scale=True, desc=f"Processing {os.path.basename(input_txt_path)}") as pbar:
+                    while True:
+                        # 1. Read a large batch of lines into memory
+                        lines_batch = [next(input_file, '').strip() for _ in range(BATCH_SIZE_LINES)]
+                        # Filter out any empty strings that may have been read
+                        lines_batch = [line for line in lines_batch if line]
                         
-                        # Convert this small list of IDs to a numpy array with our chosen dtype
-                        chunk_array = np.array(token_ids, dtype=DTYPE)
+                        # If the batch is empty, we've reached the end of the file
+                        if not lines_batch:
+                            break
+
+                        # 2. Tokenize the entire batch at once.
+                        # The `encode_batch` method is highly optimized for this.
+                        encoded_batch = tokenizer.encode_batch(lines_batch)
                         
-                        # Write the raw bytes of this array to the file.
-                        # This is very efficient.
-                        chunk_array.tofile(output_file)
-        
-        # Verify the number of tokens saved
+                        # 3. Concatenate all token IDs from the batch into a single list
+                        all_token_ids = []
+                        for encoding in encoded_batch:
+                            all_token_ids.extend(encoding.ids)
+                        
+                        # 4. Convert the large list of IDs to a numpy array and write to disk once
+                        if all_token_ids:
+                            chunk_array = np.array(all_token_ids, dtype=DTYPE)
+                            chunk_array.tofile(output_file)
+                        
+                        # Update progress bar based on bytes read
+                        pbar.update(sum(len(line.encode('utf-8')) for line in lines_batch))
+
         final_token_count = os.path.getsize(output_bin_path) // np.dtype(DTYPE).itemsize
-        print(f"Tokenization and saving complete. Total tokens saved: {final_token_count:,}")
+        print(f"\nTokenization and saving complete. Total tokens saved: {final_token_count:,}")
