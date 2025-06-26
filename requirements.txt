@@ -2,3 +2,5 @@ tqdm
 torch
 tokenizers
 transformers
+corus
+gdown
