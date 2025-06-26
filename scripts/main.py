@@ -20,6 +20,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 CONTINUE_TRAINING = False
 VOCAB_SIZE = 15000
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def setup_ddp():
     """Initializes the distributed process group."""
@@ -91,10 +92,10 @@ def validate_loss(model, val_loader, device):
 def train_tokenizer(train_data):
     # --- Шаг 1: Подготовка .txt файла для обучения ---
 
-    cleaned_book_filepath = '../data/tokenizer/books_for_tokenizer.txt'
+    cleaned_book_filepath = f'{PROJECT_DIR}/data/tokenizer/books_for_tokenizer.txt'
 
-    if not os.path.exists('../data'):
-        os.makedirs('../data')
+    if not os.path.exists(f'{PROJECT_DIR}/data'):
+        os.makedirs(f'{PROJECT_DIR}/data')
 
     with open(cleaned_book_filepath, 'w', encoding='utf-8') as f:
         f.write(train_data) 
@@ -120,7 +121,7 @@ def train_tokenizer(train_data):
     print("Обучение ByteLevelBPETokenizer завершено.")
 
     # Директория, куда мы хотим сохранить токенизатор
-    save_directory = "../data/tokenizer"
+    save_directory = f"{PROJECT_DIR}/data/tokenizer"
     # Создаем эту директорию, если она не существует
     os.makedirs(save_directory, exist_ok=True)
 
@@ -140,9 +141,9 @@ def main():
     device = f'cuda:{local_rank}'
 
     # --- DATA PREPARATION (ONLY ON RANK 0) ---
-    train_bin_path = '../data/books/train.bin'
-    val_bin_path = '../data/books/val.bin'
-    tokenizer_path = f'../data/tokenizer/tokenizer_{VOCAB_SIZE}.json'
+    train_bin_path = f'{PROJECT_DIR}/data/books/train.bin'
+    val_bin_path = f'{PROJECT_DIR}/data/books/val.bin'
+    tokenizer_path = f'{PROJECT_DIR}/data/tokenizer/tokenizer_{VOCAB_SIZE}.json'
     if rank == 0:
         print("Rank 0: Preparing data...")
         train_data_raw, val_data_raw = get_dataset()
@@ -197,7 +198,7 @@ def main():
 
     # Save JSON only on rank 0
     if rank == 0:
-        path = f"../models/{time.strftime('%Y-%m-%d_%H-%M-%S')}"
+        path = f"{PROJECT_DIR}/models/{time.strftime('%Y-%m-%d_%H-%M-%S')}"
         os.makedirs(path, exist_ok=True)
         # Save hyperparameters to a json file
         # Create hyperparameters dictionary
