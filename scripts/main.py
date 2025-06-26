@@ -121,23 +121,36 @@ def tokenize_and_save_in_batches(tokenizer: Tokenizer, input_txt_path: str, outp
     DTYPE = np.uint16 
 
     # Count total lines for a nice progress bar
-    with open(input_txt_path, 'r', encoding='utf-8') as f:
-        num_lines = sum(1 for _ in f)
+    try:
+        with open(input_txt_path, 'r', encoding='utf-8') as f:
+            num_lines = sum(1 for _ in f)
+    except FileNotFoundError:
+        print(f"Error: Input file not found at {input_txt_path}")
+        return
 
     # Use np.memmap in write mode ('w+') to create and grow the file on disk
     # We start with shape (0,) and will append to it.
     token_array = np.memmap(output_bin_path, dtype=DTYPE, mode='w+', shape=(0,))
 
-    with open(input_txt_path, 'r', encoding='utf-8') as f:
-        for line in tqdm(f, total=num_lines, desc=f"Processing {os.path.basename(input_txt_path)}"):
-            if line.strip():
-                # Tokenize one line at a time
-                token_ids = encode(tokenizer, line)
-                # Append the new tokens to the memmap file on disk.
-                # This is memory-efficient.
-                token_array = np.append(token_array, token_ids)
+    # Open the output file in binary 'append' mode ('ab').
+    # This will create the file if it doesn't exist.
+    with open(output_bin_path, 'ab') as output_file:
+        with open(input_txt_path, 'r', encoding='utf-8') as input_file:
+            for line in tqdm(input_file, total=num_lines, desc=f"Processing {os.path.basename(input_txt_path)}"):
+                if line.strip():
+                    # Tokenize one line at a time
+                    token_ids = encode(tokenizer=tokenizer, text=line)
+                    
+                    # Convert this small list of IDs to a numpy array with our chosen dtype
+                    chunk_array = np.array(token_ids, dtype=DTYPE)
+                    
+                    # Write the raw bytes of this array to the file.
+                    # This is very efficient.
+                    chunk_array.tofile(output_file)
     
-    print("Tokenization and saving complete.")
+    # Verify the number of tokens saved
+    final_token_count = os.path.getsize(output_bin_path) // np.dtype(DTYPE).itemsize
+    print(f"Tokenization and saving complete. Total tokens saved: {final_token_count:,}")
 
 def main():
     setup_ddp()
