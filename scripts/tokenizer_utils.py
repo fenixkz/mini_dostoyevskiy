@@ -52,14 +52,6 @@ class RuTokenizer:
         DTYPE = np.uint16 
         BATCH_SIZE_LINES = 100_000
 
-        # Count total lines for a nice progress bar
-        try:
-            with open(input_txt_path, 'r', encoding='utf-8') as f:
-                num_lines = sum(1 for _ in f)
-        except FileNotFoundError:
-            print(f"Error: Input file not found at {input_txt_path}")
-            return
-
         # Open the output file in binary 'append' mode ('ab').
         with open(output_bin_path, 'ab') as output_file:
             with open(input_txt_path, 'r', encoding='utf-8') as input_file:
