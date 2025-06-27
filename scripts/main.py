@@ -44,11 +44,11 @@ def get_args():
     
     # Validation & Checkpointing
     parser.add_argument('--eval_interval', type=int, default=5000, help="Validate every N optimizer steps.")
-    parser.add_argument('--eval_iters', type=int, default=200, help="Total validation batches to run across all GPUs.")
+    parser.add_argument('--eval_iters', type=int, default=1000, help="Total validation batches to run across all GPUs.")
     parser.add_argument('--patience', type=int, default=5, help="Early stopping patience.")
 
     # DDP & Hardware
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=16)
     
     return parser.parse_args()
 
@@ -285,6 +285,9 @@ def main():
                         if is_best:
                             torch.save(checkpoint_data, os.path.join(exp_path, 'best_model.pth'))
                             print(f"New best model saved with val_loss: {best_val_loss:.4f}")
+                            # Save the best loss in a text file for better visualization
+                            with open(os.path.join(exp_path, 'best_val_loss.txt'), 'w') as f:
+                                f.write(f"{best_val_loss:.6f}\n")
                     
                     # Early stopping check (needs to be synchronized)
                     stop_tensor = torch.tensor([1 if no_improve_count >= config.patience else 0], device=device)
