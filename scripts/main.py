@@ -41,7 +41,8 @@ def get_args():
     parser.add_argument('--learning_rate', type=float, default=3e-4)
     parser.add_argument('--weight_decay', type=float, default=0.01)
     parser.add_argument('--grad_accum_steps', type=int, default=4)
-    
+    parser.add_argument('--scheduler_lr_cycling', type=int, default=1000)
+
     # Validation & Checkpointing
     parser.add_argument('--eval_interval', type=int, default=5000, help="Validate every N optimizer steps.")
     parser.add_argument('--eval_iters', type=int, default=1000, help="Total validation batches to run across all GPUs.")
@@ -169,7 +170,7 @@ def main():
                                            betas=(0.9, 0.95), device_type=device)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                                                                         optimizer,
-                                                                        T_0=10000, # Period of lr cycling, per single iteration  
+                                                                        T_0=config.scheduler_lr_cycling, # Period of lr cycling, per single iteration  
                                                                         T_mult=1,                  
                                                                         eta_min=3e-6               
                                                                     )
@@ -255,7 +256,7 @@ def main():
                 # Validation run
                 if optimizer_step > 0 and optimizer_step % config.eval_interval == 0:
                     val_sampler.set_epoch(optimizer_step) # Use step to ensure new shuffle
-                    val_loss = validate(ddp_model, val_loader, device, val_sampler, config)
+                    val_loss = validate(ddp_model, val_loader, device, config)
                     
                     if rank == 0:
                         print(f"\nStep {optimizer_step}: Validation Loss: {val_loss:.4f}")
