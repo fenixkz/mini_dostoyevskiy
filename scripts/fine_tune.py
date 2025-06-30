@@ -13,7 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from tokenizers import ByteLevelBPETokenizer, Tokenizer
 from gpt import GPT
-from data import LargeTextDataset
+from data import TextDataset
 from contextlib import nullcontext
 
 # Set tokenizer parallelism to true
@@ -143,12 +143,12 @@ def main():
     train_bin_path = f'{project_dir}/data/wiki/train.bin'
     val_bin_path = f'{project_dir}/data/wiki/val.bin'
 
-    train_dataset = LargeTextDataset(train_bin_path, config.context_length)
+    train_dataset = TextDataset(train_bin_path, config.context_length)
     train_sampler = DistributedSampler(train_dataset, shuffle=True, num_replicas=world_size, rank=rank)
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, sampler=train_sampler,
                               num_workers=config.num_workers, pin_memory=True, shuffle=False)
 
-    val_dataset = LargeTextDataset(val_bin_path, config.context_length)
+    val_dataset = TextDataset(val_bin_path, config.context_length)
     val_sampler = DistributedSampler(val_dataset, shuffle=True, num_replicas=world_size, rank=rank)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, sampler=val_sampler,
                             num_workers=config.num_workers, pin_memory=True, shuffle=False)

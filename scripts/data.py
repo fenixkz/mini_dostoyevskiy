@@ -6,7 +6,7 @@ import torch
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class TextDataset(Dataset):
+class LargeTextDataset(Dataset):
     def __init__(self, bin_path: str, context_length: int = 256):
         self.data = np.memmap(bin_path, dtype=np.uint16, mode='r')
         self.context_length = context_length
@@ -23,4 +23,18 @@ class TextDataset(Dataset):
         y = chunk_pt[1:]
         return x, y
 
+
+class TextDataset(Dataset):
+    def __init__(self, data, context_length: int = 512):
+        self.data = data
+        self.context_length = context_length
+
+    def __len__(self):
+        return len(self.data) - self.context_length
+    
+    def __getitem__(self, idx):
+        
+        x = self.data[idx: idx+self.context_length]
+        y = self.data[idx+1: idx+self.context_length+1]
+        return x, y
 

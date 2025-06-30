@@ -2,3 +2,6 @@ __pycache__/
 .vscode/
 .ipynb_checkpoints/
 data/wiki/*.txt
+data/wiki/cleaned_wiki_text/
+models/
+data/tokenizer/
