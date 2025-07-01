@@ -257,8 +257,18 @@ def main():
     extra_args = dict(fused=True) if use_fused else dict()
     optimizer = torch.optim.AdamW(optim_groups, lr=config.learning_rate, betas=(0.9, 0.95), **extra_args)
     print(f"Using fused AdamW: {use_fused}")
-    dtype = 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16'
-    ctx = torch.amp.autocast(device_type='cuda', dtype={'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype])
+    dtype = 'float16' # Default for older GPUs
+    if torch.cuda.is_available():
+        # V100 is 7.0, A100 is 8.0. bfloat16 is supported on 8.0+
+        major, _ = torch.cuda.get_device_capability()
+        if major >= 8:
+            dtype = 'bfloat16'
+            if is_main_process: print("Using bfloat16 for Ampere or newer GPU.")
+        else:
+            if is_main_process: print("Using float16 for pre-Ampere GPU.")
+
+    pt_dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
+    ctx = torch.amp.autocast(device_type='cuda', dtype=pt_dtype)
     scaler = torch.amp.GradScaler(enabled=(dtype == 'float16'))
     
     if is_ddp:
