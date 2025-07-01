@@ -21,7 +21,7 @@ def write(model: GPT,
           max_new_tokens: int, 
           context_length: int,
           temperature=1.0, 
-          top_p=0.0, 
+          top_p=None, 
           top_k=None, 
           min_p = None,
           repetition_penalty=1.0, 
@@ -76,7 +76,19 @@ def write(model: GPT,
             scores = torch.where(scores < 0, scores * repetition_penalty, scores / repetition_penalty)
             # Replace the original logits by the modified
             next_token_logits.scatter_(0, tokens_in_context, scores)
-       
+
+        # 8. Prevent repeating n-grams
+        if no_repeat_ngram_size > 0 and x.size(1) >= no_repeat_ngram_size:
+            current_sequence = x.squeeze(0).tolist()
+            generated_ngrams = {tuple(current_sequence[j:j+no_repeat_ngram_size]) for j in range(len(current_sequence) - no_repeat_ngram_size + 1)}
+            prefix_tokens = current_sequence[-(no_repeat_ngram_size - 1):] if no_repeat_ngram_size > 1 else []
+            
+            for token_id in range(next_token_logits.size(-1)):
+                potential_ngram = tuple(prefix_tokens + [token_id])
+                if potential_ngram in generated_ngrams:
+                    # Set the logit to -infinity to effectively ban this token
+                    next_token_logits[token_id] = -float('Inf')
+
         # 4. Apply temperature
         next_token_logits = next_token_logits / max(temperature, 1e-6)
 
@@ -128,19 +140,7 @@ def write(model: GPT,
             # Apply this mask to the logits, setting them to -infinity
             next_token_logits[indices_to_remove] = -float('Inf')
 
-        # 8. Prevent repeating n-grams
-        if no_repeat_ngram_size > 0 and x.size(1) >= no_repeat_ngram_size:
-            # Get a current set of token IDs that are already generated
-            current_sequence = x.squeeze(0).tolist()
-            # Compute a dictionary of the set of N-gram tokens in the generated text
-            generated_ngrams = {tuple(current_sequence[j:j+no_repeat_ngram_size]) for j in range(len(current_sequence) - no_repeat_ngram_size + 1)}
-            # Get first N-1 tokens in the last N-gram
-            prefix_tokens = current_sequence[-(no_repeat_ngram_size - 1):] if no_repeat_ngram_size > 1 else []
-            # Check all tokens that make the prefix_tokens same as already generated N-grams and set them to -inf
-            for token_id in range(next_token_logits.size(-1)):
-                potential_ngram = tuple(prefix_tokens + [token_id])
-                if potential_ngram in generated_ngrams:
-                    next_token_logits[token_id] = -float('Inf')
+        
         
         # --- FINAL SAMPLING ---
         
@@ -168,7 +168,7 @@ def get_args():
     parser.add_argument('--model_dir', type=str,
                         help='Name of the directory with a saved model, without models/ path.')
 
-    parser.add_argument('--vocab_size', type=int, default=1500, help='Size of the vocabulary')
+    parser.add_argument('--vocab_size', type=int, default=15000, help='Size of the vocabulary')
     
     return parser.parse_args()
 
@@ -220,7 +220,7 @@ if __name__ == '__main__':
 
         # --- GENERATE TEXT ---
         max_new_tokens = 512
-        initial_text = "Моя страна является " # Your initial text
+        initial_text = "Кто" # Your initial text
         
         print(f"\n--- Generating text from initial prompt: '{initial_text}' ---")
         generated_tensor = write(
@@ -229,8 +229,8 @@ if __name__ == '__main__':
             initial_text=initial_text,
             max_new_tokens=max_new_tokens,
             context_length=config["context_length"],
-            temperature=0.9,
-            min_p=0.05,
+            temperature=1.5,
+            min_p=0.2,
             repetition_penalty=1.2,
             no_repeat_ngram_size=3
         )

@@ -6,7 +6,7 @@ from tokenizers import ByteLevelBPETokenizer, Tokenizer
 
 class RuTokenizer:
 
-    def __init__(self, save_path: str, vocab_size: int = 15000):
+    def __init__(self, save_path: str = "data/tokenizer", vocab_size: int = 15000):
         self.save_path = save_path
         self.vocab_size = vocab_size
 
@@ -35,10 +35,12 @@ class RuTokenizer:
         byte_level_tokenizer.save(self.save_path)
         print(f"Токенизатор сохранен в: {self.save_path}")
 
-    def encode(self, tokenizer: ByteLevelBPETokenizer, text):
+    @staticmethod
+    def encode(tokenizer: ByteLevelBPETokenizer, text):
         return tokenizer.encode(text).ids
-
-    def decode(self, tokenizer: ByteLevelBPETokenizer, ids):
+    
+    @staticmethod
+    def decode(tokenizer: ByteLevelBPETokenizer, ids):
         return tokenizer.decode(ids)
 
     def tokenize_and_save_in_batches(self, tokenizer: Tokenizer, input_txt_path: str, output_bin_path: str):

@@ -177,6 +177,7 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(embedding_dim, vocab_size, bias=False)
         self.dropout = nn.Dropout(dropout)
         self.num_layers = num_layers
+        # Tie weights for better efficiency
         self.lm_head.weight = self.embedding_layer.weight
         self.apply(self._init_weights)
 
